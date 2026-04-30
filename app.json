@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "VinylVault",
+    "slug": "vinylvault",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "vinylvault",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vinylvault.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "VinylVault uses your camera to scan record labels and covers for automatic cataloging.",
+        "NSPhotoLibraryUsageDescription": "VinylVault accesses your photo library to let you add images of your records."
+      }
+    },
+    "android": {
+      "package": "com.vinylvault.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-camera",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "VinylVault accesses your photos to let you add images of your records."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
