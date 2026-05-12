@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,13 +6,18 @@ import {
   ScrollView,
   Image,
   TouchableOpacity,
+  Pressable,
   Alert,
   ActivityIndicator,
   TextInput,
+  Modal,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '@/lib/supabase';
 import { getPriceSuggestions } from '@/lib/discogs';
+import { Ionicons } from '@expo/vector-icons';
 import { ConditionBadge } from '@/components/ConditionBadge';
 import type { Record, RecordTrack, GoldmineCondition } from '@/types/database';
 
@@ -85,7 +90,7 @@ export default function RecordDetailScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#e94560" />
+        <ActivityIndicator size="large" color="#DFFF00" />
       </View>
     );
   }
@@ -204,6 +209,17 @@ export default function RecordDetailScreen() {
                     );
                   }
                 }}
+                onKeySave={async (key) => {
+                  const { error } = await supabase
+                    .from('record_tracks')
+                    .update({ key })
+                    .eq('id', track.id);
+                  if (!error) {
+                    setTracks((prev) =>
+                      prev.map((t) => (t.id === track.id ? { ...t, key } : t))
+                    );
+                  }
+                }}
               />
             ))}
           </View>
@@ -221,7 +237,7 @@ export default function RecordDetailScreen() {
       {/* Delete */}
       <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} disabled={deleting}>
         {deleting
-          ? <ActivityIndicator color="#e94560" />
+          ? <ActivityIndicator color="#DFFF00" />
           : <Text style={styles.deleteBtnText}>Remove from Vault</Text>
         }
       </TouchableOpacity>
@@ -229,28 +245,485 @@ export default function RecordDetailScreen() {
   );
 }
 
-function TrackRow({
-  track,
-  onBpmSave,
+// ─── BPM Modal ───────────────────────────────────────────────────────────────
+function BpmModal({
+  visible,
+  currentBpm,
+  onSave,
+  onClose,
 }: {
-  track: RecordTrack;
-  onBpmSave: (bpm: number) => Promise<void>;
+  visible: boolean;
+  currentBpm: number | null;
+  onSave: (bpm: number) => Promise<void>;
+  onClose: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [bpmInput, setBpmInput] = useState(track.bpm ? String(track.bpm) : '');
+  const [mode, setMode] = useState<'type' | 'tap'>('tap');
+  const [bpmInput, setBpmInput] = useState(currentBpm ? String(currentBpm) : '');
+  const [tapBpm, setTapBpm] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const tapsRef = useRef<number[]>([]);
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Reset tap state whenever modal opens
+  useEffect(() => {
+    if (visible) {
+      setMode('tap');
+      setBpmInput(currentBpm ? String(currentBpm) : '');
+      setTapBpm(null);
+      tapsRef.current = [];
+    }
+  }, [visible]);
+
+  const handleTap = useCallback(() => {
+    const now = Date.now();
+    tapsRef.current.push(now);
+
+    // Keep only taps within last 3 seconds
+    const cutoff = now - 3000;
+    tapsRef.current = tapsRef.current.filter((t) => t >= cutoff);
+
+    if (tapsRef.current.length >= 2) {
+      const intervals: number[] = [];
+      for (let i = 1; i < tapsRef.current.length; i++) {
+        intervals.push(tapsRef.current[i] - tapsRef.current[i - 1]);
+      }
+      const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+      setTapBpm(Math.round(60000 / avg));
+    }
+
+    // Auto-reset after 3s of inactivity
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    resetTimerRef.current = setTimeout(() => {
+      tapsRef.current = [];
+      setTapBpm(null);
+    }, 3000);
+  }, []);
 
   async function handleSave() {
-    const val = parseInt(bpmInput, 10);
-    if (isNaN(val) || val < 1 || val > 300) {
-      Alert.alert('Invalid BPM', 'Enter a number between 1 and 300.');
+    const val = mode === 'tap' ? tapBpm : parseInt(bpmInput, 10);
+    if (!val || isNaN(val) || val < 1 || val > 300) {
+      Alert.alert('Invalid BPM', 'Enter or tap a BPM between 1 and 300.');
       return;
     }
     setSaving(true);
-    await onBpmSave(val);
+    await onSave(val);
     setSaving(false);
-    setEditing(false);
+    onClose();
   }
+
+  const displayBpm = mode === 'tap' ? tapBpm : (parseInt(bpmInput) || null);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={bpmStyles.backdrop}>
+        <View style={bpmStyles.sheet}>
+          {/* Header */}
+          <View style={bpmStyles.header}>
+            <Text style={bpmStyles.headerTitle}>Set BPM</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Text style={bpmStyles.closeBtn}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Mode toggle */}
+          <View style={bpmStyles.modeRow}>
+            <TouchableOpacity
+              style={[bpmStyles.modeTab, mode === 'tap' && bpmStyles.modeTabActive]}
+              onPress={() => setMode('tap')}
+            >
+              <Text style={[bpmStyles.modeTabText, mode === 'tap' && bpmStyles.modeTabTextActive]}>
+                Tap
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[bpmStyles.modeTab, mode === 'type' && bpmStyles.modeTabActive]}
+              onPress={() => setMode('type')}
+            >
+              <Text style={[bpmStyles.modeTabText, mode === 'type' && bpmStyles.modeTabTextActive]}>
+                Type
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {mode === 'tap' ? (
+            <View style={bpmStyles.tapContent}>
+              {/* BPM readout */}
+              <Text style={bpmStyles.bpmReadout}>
+                {tapBpm ?? '--'}
+              </Text>
+              <Text style={bpmStyles.bpmUnit}>BPM</Text>
+              <Text style={bpmStyles.tapHint}>
+                {tapsRef.current.length === 0
+                  ? 'Tap the button to the beat'
+                  : tapsRef.current.length === 1
+                  ? 'Keep tapping...'
+                  : `${tapsRef.current.length} taps · resets after 3s pause`}
+              </Text>
+
+              {/* Big tap button */}
+              <TouchableOpacity style={bpmStyles.tapButton} onPress={handleTap} activeOpacity={0.7}>
+                <Text style={bpmStyles.tapButtonText}>TAP</Text>
+              </TouchableOpacity>
+
+              {/* Add to Track */}
+              <TouchableOpacity
+                style={[bpmStyles.saveButton, !tapBpm && bpmStyles.saveButtonDisabled]}
+                onPress={handleSave}
+                disabled={!tapBpm || saving}
+              >
+                {saving
+                  ? <ActivityIndicator color="#0D0D12" />
+                  : <Text style={bpmStyles.saveButtonText}>Add to Track</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={bpmStyles.typeContent}>
+              <TextInput
+                style={bpmStyles.typeInput}
+                value={bpmInput}
+                onChangeText={setBpmInput}
+                keyboardType="number-pad"
+                placeholder="e.g. 128"
+                placeholderTextColor="#555"
+                maxLength={3}
+                autoFocus
+                textAlign="center"
+              />
+              <Text style={bpmStyles.typeUnit}>BPM</Text>
+              <TouchableOpacity
+                style={[bpmStyles.saveButton, !bpmInput && bpmStyles.saveButtonDisabled]}
+                onPress={handleSave}
+                disabled={!bpmInput || saving}
+              >
+                {saving
+                  ? <ActivityIndicator color="#0D0D12" />
+                  : <Text style={bpmStyles.saveButtonText}>Add to Track</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Circle of Fifths Key Modal ───────────────────────────────────────────────
+
+const CIRCLE_SIZE = 288;
+const CENTER = CIRCLE_SIZE / 2;
+const OUTER_R = 116;
+const INNER_R = 72;
+const BADGE = 38;
+const HALF = BADGE / 2;
+
+const MAJOR_KEYS = ['C', 'G', 'D', 'A', 'E', 'B', 'F#', 'Db', 'Ab', 'Eb', 'Bb', 'F'];
+const MINOR_KEYS = ['Am', 'Em', 'Bm', 'F#m', 'C#m', 'G#m', 'D#m', 'Bbm', 'Fm', 'Cm', 'Gm', 'Dm'];
+
+const RING_COLORS = [
+  '#e74c3c','#e67e22','#f1c40f','#2ecc71',
+  '#1abc9c','#3498db','#9b59b6','#8e44ad',
+  '#2980b9','#27ae60','#d35400','#c0392b',
+];
+
+// Root note frequencies (Hz) for each key label
+const KEY_FREQ: Record<string, number> = {
+  'C': 261.63, 'G': 392.00, 'D': 293.66, 'A': 440.00,
+  'E': 329.63, 'B': 493.88, 'F#': 369.99, 'Db': 277.18,
+  'Ab': 415.30, 'Eb': 311.13, 'Bb': 466.16, 'F': 349.23,
+  'Am': 440.00, 'Em': 329.63, 'Bm': 493.88, 'F#m': 369.99,
+  'C#m': 277.18, 'G#m': 415.30, 'D#m': 311.13, 'Bbm': 466.16,
+  'Fm': 349.23, 'Cm': 261.63, 'Gm': 392.00, 'Dm': 293.66,
+};
+
+function circleAngle(i: number) {
+  return (i * 30 - 90) * (Math.PI / 180);
+}
+
+// Build a piano-like mono 16-bit PCM WAV as a base64 string.
+// Uses additive harmonics (5 partials) + a piano ADSR envelope.
+function buildWavBase64(freq: number): string {
+  const sampleRate = 22050;
+  const seconds = 3;
+  const n = Math.floor(sampleRate * seconds);
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const w = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE');
+  w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * 2, true);
+
+  const attackEnd  = Math.floor(sampleRate * 0.008); // 8 ms sharp attack
+  const decayEnd   = Math.floor(sampleRate * 0.35);  // 350 ms decay to sustain level
+  const releaseEnd = n;
+
+  for (let i = 0; i < n; i++) {
+    const t = i / sampleRate;
+
+    // Piano ADSR envelope
+    let env: number;
+    if (i < attackEnd) {
+      env = i / attackEnd;                                          // 0 → 1
+    } else if (i < decayEnd) {
+      const p = (i - attackEnd) / (decayEnd - attackEnd);
+      env = 1.0 - p * 0.65;                                        // 1 → 0.35 (percussive thump)
+    } else {
+      const p = (i - decayEnd) / (releaseEnd - decayEnd);
+      env = 0.35 * Math.pow(1 - p, 1.6);                           // gentle exponential release
+    }
+
+    // Additive synthesis: fundamental + 4 harmonics mimicking piano string resonance
+    const raw =
+      Math.sin(2 * Math.PI * freq       * t) * 0.50 +
+      Math.sin(2 * Math.PI * freq * 2   * t) * 0.25 +
+      Math.sin(2 * Math.PI * freq * 3   * t) * 0.13 +
+      Math.sin(2 * Math.PI * freq * 4   * t) * 0.07 +
+      Math.sin(2 * Math.PI * freq * 5   * t) * 0.05;
+
+    v.setInt16(44 + i * 2, Math.round(raw * env * 0.80 * 32767), true);
+  }
+
+  // Chunk size must be a multiple of 3 so btoa never emits mid-string padding
+  const bytes = new Uint8Array(buf);
+  let b64 = '';
+  const CHUNK = 768; // 256 × 3
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    b64 += btoa(String.fromCharCode(...bytes.subarray(i, Math.min(i + CHUNK, bytes.length))));
+  }
+  return b64;
+}
+
+// Per-session WAV cache (key → file URI)
+const wavCache: Record<string, string> = {};
+
+async function getOrCreateWav(key: string): Promise<string | null> {
+  if (wavCache[key]) return wavCache[key];
+  const freq = KEY_FREQ[key];
+  if (!freq) return null;
+  try {
+    const b64 = buildWavBase64(freq);
+    // Use a safe filename: replace # → s, keep b as-is
+    const safe = key.replace(/#/g, 's');
+    const uri = `${FileSystem.cacheDirectory}vv_key2_${safe}.wav`;
+    await FileSystem.writeAsStringAsync(uri, b64, { encoding: 'base64' });
+    wavCache[key] = uri;
+    return uri;
+  } catch (e) {
+    console.warn('[KeyModal] WAV write failed:', e);
+    return null;
+  }
+}
+
+function KeyModal({
+  visible,
+  currentKey,
+  onSave,
+  onClose,
+}: {
+  visible: boolean;
+  currentKey: string | null;
+  onSave: (key: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<string | null>(currentKey ?? null);
+  const [soundOn, setSoundOn] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const noteGenRef = useRef(0); // guard against async race on fast tap→release
+
+  useEffect(() => {
+    if (visible) setSelected(currentKey ?? null);
+    if (!visible) stopNote();
+  }, [visible]);
+
+  // Unload the current sound without touching the generation counter.
+  // Zeroes volume first to avoid click/pop on abrupt cutoff.
+  async function unloadCurrent() {
+    const s = soundRef.current;
+    soundRef.current = null;
+    if (!s) return;
+    try { await s.setVolumeAsync(0); } catch (_) {}
+    try { await s.stopAsync(); } catch (_) {}
+    try { await s.unloadAsync(); } catch (_) {}
+  }
+
+  async function startNote(key: string) {
+    if (!soundOn) return;
+    const gen = ++noteGenRef.current;
+    try {
+      await unloadCurrent(); // stop previous note without bumping gen
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+      });
+      const uri = await getOrCreateWav(key);
+      if (!uri) { console.warn('[KeyModal] no URI for', key); return; }
+      if (gen !== noteGenRef.current) return; // finger lifted while building WAV
+      const { sound } = await Audio.Sound.createAsync(
+        { uri },
+        { shouldPlay: true, volume: 1.0 },
+      );
+      if (gen !== noteGenRef.current) {
+        sound.unloadAsync().catch(() => {});
+        return;
+      }
+      soundRef.current = sound;
+    } catch (e) {
+      console.warn('[KeyModal] startNote error:', e);
+    }
+  }
+
+  async function stopNote() {
+    noteGenRef.current++; // cancel any in-flight startNote
+    await unloadCurrent();
+  }
+
+  async function handleSave() {
+    if (!selected) return;
+    await stopNote();
+    setSaving(true);
+    await onSave(selected);
+    setSaving(false);
+    onClose();
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={keyStyles.backdrop}>
+        <View style={keyStyles.sheet}>
+
+          {/* Header */}
+          <View style={keyStyles.header}>
+            <Text style={keyStyles.headerTitle}>Set Key</Text>
+            <View style={keyStyles.headerRight}>
+              <TouchableOpacity
+                style={keyStyles.soundToggleWrap}
+                onPress={() => { if (soundOn) stopNote(); setSoundOn(v => !v); }}
+              >
+                <View style={[keyStyles.soundToggle, soundOn && keyStyles.soundToggleOn]}>
+                  <Ionicons
+                    name={soundOn ? 'volume-high-outline' : 'volume-mute-outline'}
+                    size={18}
+                    color={soundOn ? '#0D0D12' : '#555'}
+                  />
+                </View>
+                <Text style={keyStyles.soundToggleHint}>Hold to preview</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => { stopNote(); onClose(); }}>
+                <Text style={keyStyles.closeBtn}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Selected key readout */}
+          <View style={keyStyles.readoutRow}>
+            <Text style={keyStyles.readout}>{selected ?? '—'}</Text>
+            <Text style={keyStyles.readoutSub}>
+              {selected
+                ? MINOR_KEYS.includes(selected) ? 'minor' : 'major'
+                : 'hold a key to preview'}
+            </Text>
+          </View>
+
+          {/* Circle of Fifths */}
+          <View style={keyStyles.circleWrap}>
+            {MAJOR_KEYS.map((key, i) => {
+              const a = circleAngle(i);
+              return (
+                <KeyBadge
+                  key={key}
+                  keyName={key}
+                  x={CENTER + OUTER_R * Math.cos(a) - HALF}
+                  y={CENTER + OUTER_R * Math.sin(a) - HALF}
+                  isMinor={false}
+                  colorIndex={i}
+                  isSelected={selected === key}
+                  onPressIn={() => { setSelected(key); startNote(key); }}
+                  onPressOut={stopNote}
+                />
+              );
+            })}
+            {MINOR_KEYS.map((key, i) => {
+              const a = circleAngle(i);
+              return (
+                <KeyBadge
+                  key={key}
+                  keyName={key}
+                  x={CENTER + INNER_R * Math.cos(a) - HALF}
+                  y={CENTER + INNER_R * Math.sin(a) - HALF}
+                  isMinor={true}
+                  colorIndex={i}
+                  isSelected={selected === key}
+                  onPressIn={() => { setSelected(key); startNote(key); }}
+                  onPressOut={stopNote}
+                />
+              );
+            })}
+            <View style={keyStyles.centerDot} />
+          </View>
+
+          {/* Add to Track */}
+          <TouchableOpacity
+            style={[keyStyles.saveButton, !selected && keyStyles.saveButtonDisabled]}
+            onPress={handleSave}
+            disabled={!selected || saving}
+          >
+            {saving
+              ? <ActivityIndicator color="#0D0D12" />
+              : <Text style={keyStyles.saveButtonText}>Add to Track</Text>
+            }
+          </TouchableOpacity>
+
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// KeyBadge is intentionally defined OUTSIDE KeyModal so React never
+// remounts it on re-render (which would sever the active touch and kill onPressOut).
+function KeyBadge({
+  keyName, x, y, isMinor, colorIndex, isSelected, onPressIn, onPressOut,
+}: {
+  keyName: string; x: number; y: number; isMinor: boolean;
+  colorIndex: number; isSelected: boolean;
+  onPressIn: () => void; onPressOut: () => void;
+}) {
+  return (
+    <Pressable
+      style={[
+        keyStyles.keyBadge,
+        isMinor && keyStyles.keyBadgeMinor,
+        { left: x, top: y, backgroundColor: isSelected ? RING_COLORS[colorIndex] : (isMinor ? '#141418' : '#1C1C24') },
+        isSelected && keyStyles.keyBadgeSelected,
+      ]}
+      onPressIn={onPressIn}
+      onPressOut={onPressOut}
+    >
+      <Text style={[isMinor ? keyStyles.keyTextMinor : keyStyles.keyText, isSelected && keyStyles.keyTextSelected]}>
+        {keyName}
+      </Text>
+    </Pressable>
+  );
+}
+
+// ─── TrackRow ─────────────────────────────────────────────────────────────────
+function TrackRow({
+  track,
+  onBpmSave,
+  onKeySave,
+}: {
+  track: RecordTrack;
+  onBpmSave: (bpm: number) => Promise<void>;
+  onKeySave: (key: string) => Promise<void>;
+}) {
+  const [bpmModalVisible, setBpmModalVisible] = useState(false);
+  const [keyModalVisible, setKeyModalVisible] = useState(false);
 
   return (
     <View style={styles.trackRow}>
@@ -260,33 +733,35 @@ function TrackRow({
         {track.duration ? (
           <Text style={styles.trackDuration}>{track.duration}</Text>
         ) : null}
-        {editing ? (
-          <View style={styles.bpmInputRow}>
-            <TextInput
-              style={styles.bpmInput}
-              value={bpmInput}
-              onChangeText={setBpmInput}
-              keyboardType="number-pad"
-              placeholder="BPM"
-              placeholderTextColor="#555"
-              maxLength={3}
-              autoFocus
-            />
-            <TouchableOpacity onPress={handleSave} disabled={saving}>
-              <Text style={styles.bpmSave}>{saving ? '…' : '✓'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setEditing(false)}>
-              <Text style={styles.bpmCancel}>✕</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity onPress={() => setEditing(true)}>
-            <Text style={styles.bpmBadge}>
-              {track.bpm ? `${track.bpm} BPM` : '+ BPM'}
-            </Text>
-          </TouchableOpacity>
-        )}
+
+        {/* BPM badge — opens BPM modal */}
+        <TouchableOpacity onPress={() => setBpmModalVisible(true)}>
+          <Text style={styles.bpmBadge}>
+            {track.bpm ? `${track.bpm} BPM` : '+ BPM'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Key badge — opens Circle of Fifths modal */}
+        <TouchableOpacity onPress={() => setKeyModalVisible(true)}>
+          <Text style={styles.keyBadge}>
+            {track.key ? track.key : '+ Key'}
+          </Text>
+        </TouchableOpacity>
       </View>
+
+      <BpmModal
+        visible={bpmModalVisible}
+        currentBpm={track.bpm ?? null}
+        onSave={onBpmSave}
+        onClose={() => setBpmModalVisible(false)}
+      />
+
+      <KeyModal
+        visible={keyModalVisible}
+        currentKey={track.key ?? null}
+        onSave={onKeySave}
+        onClose={() => setKeyModalVisible(false)}
+      />
     </View>
   );
 }
@@ -301,22 +776,22 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#1a1a2e' },
+  container: { flex: 1, backgroundColor: '#0D0D12' },
   content: { paddingBottom: 40 },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1a2e' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0D0D12' },
   errorText: { color: '#aaa', fontSize: 16 },
   cover: { width: '100%', height: 300, resizeMode: 'cover' },
   coverPlaceholder: {
     width: '100%',
     height: 220,
-    backgroundColor: '#16213e',
+    backgroundColor: '#1C1C24',
     justifyContent: 'center',
     alignItems: 'center',
   },
   coverEmoji: { fontSize: 72 },
   titleBlock: { padding: 20, paddingBottom: 8 },
   title: { color: '#fff', fontSize: 24, fontWeight: '800', marginBottom: 4 },
-  artist: { color: '#e94560', fontSize: 17, fontWeight: '600' },
+  artist: { color: '#DFFF00', fontSize: 17, fontWeight: '600' },
   metaRow: {
     flexDirection: 'row',
     paddingHorizontal: 20,
@@ -325,23 +800,23 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   metaChip: {
-    backgroundColor: '#16213e',
+    backgroundColor: '#1C1C24',
     color: '#aaa',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
     fontSize: 13,
     borderWidth: 1,
-    borderColor: '#0f3460',
+    borderColor: '#2A2A3A',
   },
   section: {
     marginHorizontal: 20,
     marginTop: 20,
-    backgroundColor: '#16213e',
+    backgroundColor: '#1C1C24',
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#0f3460',
+    borderColor: '#2A2A3A',
   },
   sectionTitle: {
     color: '#aaa',
@@ -358,7 +833,7 @@ const styles = StyleSheet.create({
   valuationItem: {},
   valuationLabel: { color: '#aaa', fontSize: 12, marginBottom: 2 },
   valuationAmount: { color: '#fff', fontSize: 18, fontWeight: '700' },
-  highlight: { color: '#e94560' },
+  highlight: { color: '#DFFF00' },
   detailsTable: { gap: 10 },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between' },
   detailLabel: { color: '#aaa', fontSize: 14, flex: 1 },
@@ -370,19 +845,234 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#e94560',
+    borderColor: '#DFFF00',
     alignItems: 'center',
   },
-  deleteBtnText: { color: '#e94560', fontSize: 15, fontWeight: '600' },
+  deleteBtnText: { color: '#DFFF00', fontSize: 15, fontWeight: '600' },
   tracklist: { gap: 10 },
   trackRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  trackPosition: { color: '#e94560', fontSize: 13, fontWeight: '700', width: 28, textAlign: 'right' },
+  trackPosition: { color: '#DFFF00', fontSize: 13, fontWeight: '700', width: 28, textAlign: 'right' },
   trackTitle: { color: '#fff', fontSize: 14, flex: 1 },
   trackRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   trackDuration: { color: '#666', fontSize: 13 },
-  bpmBadge: { color: '#e94560', fontSize: 12, fontWeight: '600', borderWidth: 1, borderColor: '#e94560', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  bpmBadge: { color: '#DFFF00', fontSize: 12, fontWeight: '600', borderWidth: 1, borderColor: '#DFFF00', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  keyBadge: { color: '#7FFFD4', fontSize: 12, fontWeight: '600', borderWidth: 1, borderColor: '#7FFFD4', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   bpmInputRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  bpmInput: { backgroundColor: '#0f3460', color: '#fff', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, fontSize: 13, width: 52, textAlign: 'center' },
-  bpmSave: { color: '#4ade80', fontSize: 16, fontWeight: '700', paddingHorizontal: 4 },
+  bpmInput: { backgroundColor: '#2A2A3A', color: '#fff', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, fontSize: 13, width: 52, textAlign: 'center' },
+  bpmSave: { color: '#7FFFD4', fontSize: 16, fontWeight: '700', paddingHorizontal: 4 },
   bpmCancel: { color: '#888', fontSize: 14, paddingHorizontal: 4 },
+});
+
+const bpmStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#1C1C24',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingBottom: 48,
+    paddingTop: 20,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: '#2A2A3A',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  headerTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  closeBtn: { color: '#888', fontSize: 20, paddingHorizontal: 4 },
+  modeRow: {
+    flexDirection: 'row',
+    backgroundColor: '#0D0D12',
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 28,
+  },
+  modeTab: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  modeTabActive: { backgroundColor: '#2A2A3A' },
+  modeTabText: { color: '#555', fontSize: 14, fontWeight: '600' },
+  modeTabTextActive: { color: '#fff' },
+
+  // Tap mode
+  tapContent: { alignItems: 'center' },
+  bpmReadout: {
+    color: '#DFFF00',
+    fontSize: 80,
+    fontWeight: '800',
+    lineHeight: 88,
+    letterSpacing: -2,
+  },
+  bpmUnit: { color: '#555', fontSize: 14, fontWeight: '700', letterSpacing: 3, marginBottom: 8 },
+  tapHint: { color: '#666', fontSize: 13, marginBottom: 32, textAlign: 'center' },
+  tapButton: {
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: '#0D0D12',
+    borderWidth: 3,
+    borderColor: '#DFFF00',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  tapButtonText: {
+    color: '#DFFF00',
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: 4,
+  },
+
+  // Type mode
+  typeContent: { alignItems: 'center', paddingTop: 8 },
+  typeInput: {
+    backgroundColor: '#0D0D12',
+    color: '#DFFF00',
+    fontSize: 64,
+    fontWeight: '800',
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#2A2A3A',
+    marginBottom: 8,
+  },
+  typeUnit: { color: '#555', fontSize: 14, fontWeight: '700', letterSpacing: 3, marginBottom: 32 },
+
+  // Shared save button
+  saveButton: {
+    backgroundColor: '#DFFF00',
+    borderRadius: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 48,
+    alignItems: 'center',
+    width: '100%',
+  },
+  saveButtonDisabled: { opacity: 0.35 },
+  saveButtonText: { color: '#0D0D12', fontSize: 16, fontWeight: '800' },
+});
+
+const keyStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.80)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#1C1C24',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingBottom: 40,
+    paddingTop: 20,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: '#2A2A3A',
+    alignItems: 'center',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 12,
+  },
+  headerTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  soundToggleWrap: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  soundToggle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#2A2A3A',
+    backgroundColor: '#0D0D12',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  soundToggleOn: {
+    backgroundColor: '#7FFFD4',
+    borderColor: '#7FFFD4',
+  },
+  soundToggleHint: {
+    color: '#444',
+    fontSize: 9,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+  },
+  closeBtn: { color: '#888', fontSize: 20, paddingHorizontal: 4 },
+
+  readoutRow: { alignItems: 'center', marginBottom: 16 },
+  readout: {
+    color: '#7FFFD4',
+    fontSize: 44,
+    fontWeight: '800',
+    letterSpacing: -1,
+    lineHeight: 52,
+  },
+  readoutSub: { color: '#555', fontSize: 13, marginTop: 2 },
+
+  circleWrap: {
+    width: CIRCLE_SIZE,
+    height: CIRCLE_SIZE,
+    position: 'relative',
+    marginBottom: 24,
+  },
+  keyBadge: {
+    position: 'absolute',
+    width: BADGE,
+    height: BADGE,
+    borderRadius: BADGE / 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#2A2A3A',
+  },
+  keyBadgeMinor: {
+    borderColor: '#222230',
+  },
+  keyBadgeSelected: {
+    borderWidth: 0,
+    shadowColor: '#fff',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  keyText: { color: '#ccc', fontSize: 11, fontWeight: '700' },
+  keyTextMinor: { color: '#666', fontSize: 10, fontWeight: '600' },
+  keyTextSelected: { color: '#fff', fontWeight: '800' },
+  centerDot: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#2A2A3A',
+    left: CENTER - 6,
+    top: CENTER - 6,
+  },
+
+  saveButton: {
+    backgroundColor: '#7FFFD4',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    width: '100%',
+  },
+  saveButtonDisabled: { opacity: 0.3 },
+  saveButtonText: { color: '#0D0D12', fontSize: 16, fontWeight: '800' },
 });

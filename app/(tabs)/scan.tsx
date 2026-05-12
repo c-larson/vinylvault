@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,9 +11,11 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { supabase, saveTracks } from '@/lib/supabase';
 import { searchDiscogs, getRelease, getArtistName } from '@/lib/discogs';
+import { identifyRecordFromImage } from '@/lib/gemini';
 import type { DiscogsSearchResult } from '@/lib/discogs';
 
 type ScanStep = 'camera' | 'results' | 'saving';
@@ -27,25 +29,19 @@ export default function ScanScreen() {
   const [capturedUri, setCapturedUri] = useState<string | null>(null);
   const cameraRef = useRef<CameraView>(null);
 
-  // ─── Vision API: extract text from image ────────────────────────────────────
-  async function extractTextFromImage(base64: string): Promise<string> {
-    const apiKey = process.env.EXPO_PUBLIC_GOOGLE_VISION_API_KEY;
-    const res = await fetch(
-      `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requests: [{
-            image: { content: base64 },
-            features: [{ type: 'TEXT_DETECTION', maxResults: 1 }],
-          }],
-        }),
-      }
-    );
-    const data = await res.json();
-    return data.responses?.[0]?.fullTextAnnotation?.text ?? '';
-  }
+  // Reset to camera view every time the tab is focused
+  const resetState = useCallback(() => {
+    setStep('camera');
+    setResults([]);
+    setCapturedUri(null);
+    setAnalyzing(false);
+  }, []);
+
+  useFocusEffect(resetState);
+
+  // ─── Gemini Vision: identify artist + album from image ──────────────────────
+  // (Replaces Google Cloud Vision TEXT_DETECTION — Gemini returns structured
+  //  { artist, album } instead of raw OCR text, giving much better search results)
 
   // ─── Take photo ──────────────────────────────────────────────────────────────
   async function takePhoto() {
@@ -75,17 +71,26 @@ export default function ScanScreen() {
     await processImage(result.assets[0].base64);
   }
 
-  // ─── Process: OCR → Discogs search ──────────────────────────────────────────
+  // ─── Process: Gemini Vision → Discogs search ────────────────────────────────
   async function processImage(base64: string) {
     try {
-      const text = await extractTextFromImage(base64);
-      if (!text.trim()) {
-        Alert.alert('No text found', 'Try a clearer photo of the record label or sleeve.');
+      const identification = await identifyRecordFromImage(base64);
+
+      if (!identification || (!identification.artist && !identification.album)) {
+        Alert.alert(
+          'Could not identify record',
+          'Try a clearer photo of the cover or label, or use Search to find it manually.'
+        );
         setAnalyzing(false);
         return;
       }
-      // Use first 2 lines of OCR text as search query
-      const query = text.split('\n').slice(0, 2).join(' ').trim();
+
+      // Build the best possible query from what Gemini found
+      const query = [identification.artist, identification.album]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+
       const searchResults = await searchDiscogs(query, { per_page: 8 });
       setResults(searchResults);
       setStep('results');
@@ -132,8 +137,8 @@ export default function ScanScreen() {
       await saveTracks(data.id, release.tracklist, artistName);
 
       Alert.alert('Added!', `"${release.title}" added to your vault.`, [
-        { text: 'View Record', onPress: () => router.push(`/record/${data.id}`) },
-        { text: 'Scan Another', onPress: () => { setStep('camera'); setResults([]); setCapturedUri(null); } },
+        { text: 'View Record', onPress: () => { resetState(); router.push(`/record/${data.id}`); } },
+        { text: 'Scan Another', onPress: resetState },
       ]);
     } catch (e: any) {
       Alert.alert('Save failed', e.message);
@@ -159,7 +164,7 @@ export default function ScanScreen() {
   if (step === 'saving') {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#e94560" />
+        <ActivityIndicator size="large" color="#DFFF00" />
         <Text style={styles.savingText}>Adding to your vault...</Text>
       </View>
     );
@@ -218,12 +223,13 @@ export default function ScanScreen() {
 
       <View style={styles.controls}>
         <TouchableOpacity style={styles.libraryButton} onPress={pickFromLibrary} disabled={analyzing}>
-          <Text style={styles.libraryText}>📁 Library</Text>
+          <Ionicons name="folder-outline" size={24} color="#A0A0A0" />
+          <Text style={styles.libraryText}>Upload</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.captureButton} onPress={takePhoto} disabled={analyzing}>
           {analyzing
-            ? <ActivityIndicator color="#fff" />
+            ? <ActivityIndicator color="#0D0D12" />
             : <View style={styles.captureInner} />
           }
         </TouchableOpacity>
@@ -235,15 +241,15 @@ export default function ScanScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#1a1a2e' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1a2e', padding: 32 },
+  container: { flex: 1, backgroundColor: '#0D0D12' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0D0D12', padding: 32 },
   camera: { flex: 1 },
   overlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scanFrame: {
     width: 260,
     height: 260,
     borderWidth: 2,
-    borderColor: '#e94560',
+    borderColor: '#DFFF00',
     borderRadius: 16,
     backgroundColor: 'transparent',
   },
@@ -253,13 +259,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 24,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#0D0D12',
   },
   captureButton: {
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: '#e94560',
+    backgroundColor: '#DFFF00',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -271,13 +277,13 @@ const styles = StyleSheet.create({
   },
   libraryButton: {
     width: 72,
-    height: 44,
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
   },
-  libraryText: { color: '#aaa', fontSize: 13 },
+  libraryText: { color: '#A0A0A0', fontSize: 11, fontWeight: '600' },
   permText: { color: '#aaa', textAlign: 'center', marginBottom: 24, fontSize: 15 },
-  button: { backgroundColor: '#e94560', borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32 },
+  button: { backgroundColor: '#DFFF00', borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32 },
   buttonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
   resultsHeader: {
     flexDirection: 'row',
@@ -285,25 +291,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#0f3460',
+    borderBottomColor: '#2A2A3A',
   },
   resultsTitle: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  backLink: { color: '#e94560', fontSize: 15 },
+  backLink: { color: '#DFFF00', fontSize: 15 },
   resultsList: { padding: 16, gap: 12 },
   resultItem: {
     flexDirection: 'row',
-    backgroundColor: '#16213e',
+    backgroundColor: '#1C1C24',
     borderRadius: 12,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#0f3460',
+    borderColor: '#2A2A3A',
   },
   thumb: { width: 80, height: 80 },
-  thumbPlaceholder: { backgroundColor: '#0f3460' },
+  thumbPlaceholder: { backgroundColor: '#2A2A3A' },
   resultInfo: { flex: 1, padding: 12, justifyContent: 'center' },
   resultTitle: { color: '#fff', fontSize: 15, fontWeight: '600', marginBottom: 4 },
   resultMeta: { color: '#aaa', fontSize: 12 },
-  resultLabel: { color: '#e94560', fontSize: 11, marginTop: 2 },
+  resultLabel: { color: '#DFFF00', fontSize: 11, marginTop: 2 },
   noResults: { color: '#aaa', textAlign: 'center', marginTop: 48, fontSize: 15 },
   savingText: { color: '#aaa', marginTop: 16, fontSize: 15 },
 });

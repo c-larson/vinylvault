@@ -127,7 +127,7 @@ export default function SearchScreen() {
               disabled={saving === item.id}
             >
               {saving === item.id
-                ? <ActivityIndicator color="#e94560" size="small" />
+                ? <ActivityIndicator color="#DFFF00" size="small" />
                 : <Text style={styles.addBtnText}>+ Add</Text>
               }
             </TouchableOpacity>
@@ -139,50 +139,50 @@ export default function SearchScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#1a1a2e' },
+  container: { flex: 1, backgroundColor: '#0D0D12' },
   searchBar: {
     flexDirection: 'row',
     padding: 16,
     gap: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#0f3460',
+    borderBottomColor: '#2A2A3A',
   },
   input: {
     flex: 1,
-    backgroundColor: '#16213e',
+    backgroundColor: '#1C1C24',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
     color: '#fff',
     fontSize: 15,
     borderWidth: 1,
-    borderColor: '#0f3460',
+    borderColor: '#2A2A3A',
   },
   searchBtn: {
-    backgroundColor: '#e94560',
+    backgroundColor: '#DFFF00',
     borderRadius: 10,
     paddingHorizontal: 16,
     justifyContent: 'center',
   },
-  searchBtnText: { color: '#fff', fontWeight: '700' },
+  searchBtnText: { color: '#0D0D12', fontWeight: '700' },
   list: { padding: 16, gap: 12 },
   emptyText: { color: '#666', textAlign: 'center', marginTop: 48, fontSize: 15 },
   resultItem: {
     flexDirection: 'row',
-    backgroundColor: '#16213e',
+    backgroundColor: '#1C1C24',
     borderRadius: 12,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#0f3460',
+    borderColor: '#2A2A3A',
     alignItems: 'center',
   },
   thumb: { width: 70, height: 70 },
-  thumbPlaceholder: { backgroundColor: '#0f3460', justifyContent: 'center', alignItems: 'center' },
+  thumbPlaceholder: { backgroundColor: '#2A2A3A', justifyContent: 'center', alignItems: 'center' },
   thumbEmoji: { fontSize: 24 },
   info: { flex: 1, padding: 12 },
   title: { color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 3 },
   meta: { color: '#aaa', fontSize: 12 },
-  label: { color: '#e94560', fontSize: 11, marginTop: 2 },
+  label: { color: '#DFFF00', fontSize: 11, marginTop: 2 },
   addBtn: { paddingHorizontal: 16, paddingVertical: 8 },
-  addBtnText: { color: '#e94560', fontWeight: '700', fontSize: 14 },
+  addBtnText: { color: '#DFFF00', fontWeight: '700', fontSize: 14 },
 });

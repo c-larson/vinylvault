@@ -64,10 +64,15 @@ export async function lookupBpmDeezer(
         t.artist.name.toLowerCase().includes(lowerArtist)
     ) ?? data.data[0];
 
-    // Deezer returns 0 for unknown BPM
-    if (!best.bpm || best.bpm === 0) return null;
+    // BPM is not included in search results — fetch full track details by ID
+    const trackRes = await fetch(`${BASE_URL}/track/${best.id}`);
+    if (!trackRes.ok) return null;
+    const fullTrack: DeezerTrack = await trackRes.json();
 
-    return Math.round(best.bpm);
+    // Deezer returns 0 for unknown BPM
+    if (!fullTrack.bpm || fullTrack.bpm === 0) return null;
+
+    return Math.round(fullTrack.bpm);
   } catch (e) {
     console.warn('Deezer BPM lookup error:', e);
     return null;

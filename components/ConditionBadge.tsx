@@ -3,7 +3,7 @@ import type { GoldmineCondition } from '@/types/database';
 
 // Goldmine condition colors
 const CONDITION_COLORS: Record<GoldmineCondition, { bg: string; text: string }> = {
-  'M':   { bg: '#7c3aed', text: '#fff' },
+  'M':   { bg: '#DFFF00', text: '#0D0D12' },
   'NM':  { bg: '#1d4ed8', text: '#fff' },
   'VG+': { bg: '#047857', text: '#fff' },
   'VG':  { bg: '#065f46', text: '#a7f3d0' },
@@ -19,7 +19,7 @@ interface Props {
 }
 
 export function ConditionBadge({ condition, size = 'normal' }: Props) {
-  const colors = CONDITION_COLORS[condition] ?? { bg: '#333', text: '#aaa' };
+  const colors = CONDITION_COLORS[condition] ?? { bg: '#2A2A3A', text: '#A0A0A0' };
   const isSmall = size === 'small';
 
   return (

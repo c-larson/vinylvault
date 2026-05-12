@@ -65,7 +65,7 @@ export default function LoginScreen() {
           disabled={loading}
         >
           {loading
-            ? <ActivityIndicator color="#fff" />
+            ? <ActivityIndicator color="#0D0D12" />
             : <Text style={styles.buttonText}>Log In</Text>
           }
         </TouchableOpacity>
@@ -81,7 +81,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#0D0D12',
   },
   inner: {
     flex: 1,
@@ -91,30 +91,30 @@ const styles = StyleSheet.create({
   logo: {
     fontSize: 40,
     fontWeight: '800',
-    color: '#e94560',
+    color: '#DFFF00',
     textAlign: 'center',
     marginBottom: 8,
     letterSpacing: 1,
   },
   tagline: {
     fontSize: 16,
-    color: '#aaa',
+    color: '#A0A0A0',
     textAlign: 'center',
     marginBottom: 48,
   },
   input: {
-    backgroundColor: '#16213e',
+    backgroundColor: '#1C1C24',
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 16,
-    color: '#fff',
+    color: '#F8F8F8',
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#0f3460',
+    borderColor: '#2A2A3A',
   },
   button: {
-    backgroundColor: '#e94560',
+    backgroundColor: '#DFFF00',
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
@@ -125,12 +125,12 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   buttonText: {
-    color: '#fff',
+    color: '#0D0D12',
     fontSize: 16,
     fontWeight: '700',
   },
   link: {
-    color: '#e94560',
+    color: '#DFFF00',
     textAlign: 'center',
     fontSize: 14,
   },

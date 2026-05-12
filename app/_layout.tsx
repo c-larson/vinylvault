@@ -50,8 +50,8 @@ export default function RootLayout() {
   // Show a simple loading screen until auth is checked
   if (!initialized) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#e94560" />
+      <View style={{ flex: 1, backgroundColor: '#0D0D12', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#DFFF00" />
       </View>
     );
   }
@@ -68,8 +68,8 @@ export default function RootLayout() {
             headerShown: true,
             headerTitle: '',
             headerBackTitle: 'Collection',
-            headerStyle: { backgroundColor: '#1a1a2e' },
-            headerTintColor: '#e94560',
+            headerStyle: { backgroundColor: '#0D0D12' },
+            headerTintColor: '#DFFF00',
           }}
         />
       </Stack>
