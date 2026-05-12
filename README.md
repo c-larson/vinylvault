@@ -8,7 +8,7 @@ Built as a capstone project for the Quantic School of Business and Technology MS
 
 ## Features
 
-- **Photo-based cataloging** — Take a photo of any album cover or spine; Google Cloud Vision OCR extracts the artist and title, then searches the Discogs database for a match
+- **Photo-based cataloging** — Take a photo of any album cover or spine; Google Gemini 2.5 Flash Vision identifies the artist and album title and returns structured JSON, which is passed to the Discogs database for a match
 - **Manual search** — Search the full Discogs catalog by artist or album name and add releases with one tap
 - **Collection browsing** — Scrollable grid of album art with sort/filter controls
 - **Record detail view** — Full metadata: artist, label, year, format, genre, catalog number, condition grade, and estimated market value by condition (Goldmine Standard)
@@ -26,7 +26,7 @@ Built as a capstone project for the Quantic School of Business and Technology MS
 | Navigation | Expo Router v6 (file-based) |
 | Backend / Auth | Supabase (Postgres + Auth + RLS) |
 | Record Catalog | Discogs API |
-| Cover Recognition | Google Cloud Vision API (OCR) |
+| Cover Recognition | Google Gemini 2.5 Flash Vision API |
 | BPM Data | Deezer API (free, no key required) |
 | Language | TypeScript |
 
@@ -61,7 +61,7 @@ cp .env.example .env.local
 | `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Supabase project settings → API |
 | `EXPO_PUBLIC_DISCOGS_CONSUMER_KEY` | discogs.com/settings/developers |
 | `EXPO_PUBLIC_DISCOGS_CONSUMER_SECRET` | discogs.com/settings/developers |
-| `EXPO_PUBLIC_GOOGLE_VISION_API_KEY` | console.cloud.google.com |
+| `EXPO_PUBLIC_GEMINI_API_KEY` | aistudio.google.com/app/apikey |
 
 ### Database Setup
 
@@ -96,7 +96,8 @@ vinylvault/
 ├── lib/
 │   ├── supabase.ts      # Supabase client + saveTracks helper
 │   ├── discogs.ts       # Discogs API client (search, release, pricing)
-│   ├── deezer.ts        # Deezer API client (BPM lookup)
+│   ├── gemini.ts        # Gemini Vision API client (photo → artist/album JSON)
+│   ├── deezer.ts        # Deezer BPM client (stubbed — CORS issues on mobile)
 │   └── getsongbpm.ts    # Stubbed (Cloudflare blocks mobile requests)
 └── types/
     └── database.ts      # Generated Supabase type definitions
@@ -108,7 +109,7 @@ vinylvault/
 
 **Discogs** — Powers catalog search, release metadata (tracklist, label, format, pressing info), and condition-based market pricing. Authenticated with consumer key/secret for read-only access. Rate limit: 60 req/min.
 
-**Google Cloud Vision** — Used in the camera scan flow to extract text (artist name, album title) from photos of album covers and spines. The extracted text is then passed to Discogs search.
+**Google Gemini 2.5 Flash Vision** — Used in the camera scan flow to identify the artist name and album title from photos of album covers and spines. Unlike traditional OCR, Gemini returns structured JSON (`{ artist, album }`) directly, eliminating a text-parsing step and improving accuracy on stylised or foreign-language covers. Accessed via the Gemini API (Google AI Studio). `thinkingBudget` is set to 0 for low-latency extraction.
 
 **Deezer** — Free API, no key required. Used to look up BPM for each track in a release's tracklist. Returns 0 for tracks with unknown BPM; those fall back to manual user entry.
 
