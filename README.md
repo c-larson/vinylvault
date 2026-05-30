@@ -13,7 +13,7 @@ Built as a capstone project for the Quantic School of Business and Technology MS
 | Resource | Link |
 |---|---|
 | 📋 Agile task board (GitHub Projects) | https://github.com/users/c-larson/projects/1 |
-| 📱 Install / run the app (EAS build or Expo) | _add link_ |
+| 📱 Install the app (Android APK) | [Releases → v1.0.0](https://github.com/c-larson/vinylvault/releases/tag/v1.0.0) |
 | 🎥 Demo / presentation video | _add link_ |
 
 > **Capstone reviewers / TODO:** replace the placeholders above with the Trello board URL, an EAS build (or Expo) install link, and the recorded demo. These are required Capstone submission components.
