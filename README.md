@@ -1,8 +1,22 @@
-# VinylVault
+# Decibel Archive
+
+[![CI](https://github.com/c-larson/vinylvault/actions/workflows/ci.yml/badge.svg)](https://github.com/c-larson/vinylvault/actions/workflows/ci.yml)
 
 A mobile-first vinyl record collection app built with React Native and Expo. Catalog your records by taking a photo or searching by name, track condition and estimated market value using Discogs pricing data, and view full tracklists with BPM data for every track.
 
 Built as a capstone project for the Quantic School of Business and Technology MSSE program.
+
+---
+
+## Project Links
+
+| Resource | Link |
+|---|---|
+| 📋 Agile task board (GitHub Projects) | https://github.com/users/c-larson/projects/1 |
+| 📱 Install / run the app (EAS build or Expo) | _add link_ |
+| 🎥 Demo / presentation video | _add link_ |
+
+> **Capstone reviewers / TODO:** replace the placeholders above with the Trello board URL, an EAS build (or Expo) install link, and the recorded demo. These are required Capstone submission components.
 
 ---
 
@@ -29,6 +43,8 @@ Built as a capstone project for the Quantic School of Business and Technology MS
 | Cover Recognition | Google Gemini 2.5 Flash Vision API |
 | BPM Data | Deezer API (free, no key required) |
 | Language | TypeScript |
+| Testing | Jest (`jest-expo` preset) |
+| CI | GitHub Actions (type check, lint, tests) |
 
 ---
 
@@ -82,6 +98,24 @@ Scan the QR code with Expo Go, or press `i` for iOS simulator.
 
 ---
 
+## Testing
+
+Automated tests run with **Jest** (the `jest-expo` preset):
+
+```bash
+npm test            # run the suite once
+npm run test:watch  # watch mode
+```
+
+Coverage focuses on the pure logic extracted from the UI so it can be tested without a device:
+
+- **`lib/cells.ts`** — table-cell formatting (`getTrackCellValue`, `getListCellValue`): null/placeholder handling, BPM-of-zero rendering, short-date formatting, and tag joining.
+- **`lib/discogs.ts`** — `getArtistName`: Discogs artist parsing, including stripping `(n)` disambiguation suffixes and joining multiple artists.
+
+Every push and pull request runs the full quality gate in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): **type check → lint → tests**.
+
+---
+
 ## Project Structure
 
 ```
@@ -98,9 +132,11 @@ vinylvault/
 │   ├── discogs.ts       # Discogs API client (search, release, pricing)
 │   ├── gemini.ts        # Gemini Vision API client (photo → artist/album JSON)
 │   ├── deezer.ts        # Deezer BPM client (stubbed — CORS issues on mobile)
-│   └── getsongbpm.ts    # Stubbed (Cloudflare blocks mobile requests)
+│   ├── getsongbpm.ts    # Stubbed (Cloudflare blocks mobile requests)
+│   └── cells.ts         # Pure table-cell formatting helpers (unit-tested)
+├── __tests__/           # Jest unit tests (cells, discogs)
 └── types/
-    └── database.ts      # Generated Supabase type definitions
+    └── database.ts      # Supabase type definitions (typed client)
 ```
 
 ---

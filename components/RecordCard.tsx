@@ -1,9 +1,9 @@
 import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native';
 import { ConditionBadge } from './ConditionBadge';
-import type { Record } from '@/types/database';
+import type { VinylRecord } from '@/types/database';
 
 interface Props {
-  record: Record;
+  record: VinylRecord;
   onPress: () => void;
 }
 

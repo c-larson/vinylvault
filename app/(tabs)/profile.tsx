@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   TouchableOpacity,
   Alert,
@@ -85,6 +86,17 @@ export default function ProfileScreen() {
       <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut}>
         <Text style={styles.signOutText}>Sign Out</Text>
       </TouchableOpacity>
+
+      {/* Brand mark */}
+      <View style={styles.brandFooter}>
+        <Image
+          source={require('../../assets/images/splash-icon.png')}
+          style={styles.brandLogo}
+          resizeMode="contain"
+        />
+        <Text style={styles.brandName}>Decibel Archive</Text>
+        <Text style={styles.brandTagline}>Your records. Cataloged.</Text>
+      </View>
     </ScrollView>
   );
 }
@@ -128,4 +140,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   signOutText: { color: '#DFFF00', fontSize: 16, fontWeight: '600' },
+  brandFooter: { alignItems: 'center', marginTop: 40, marginBottom: 8 },
+  brandLogo: { width: 104, height: 104, marginBottom: 12 },
+  brandName: { color: '#DFFF00', fontSize: 18, fontWeight: '800', letterSpacing: 1.5 },
+  brandTagline: { color: '#666', fontSize: 12, marginTop: 4 },
 });

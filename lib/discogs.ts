@@ -6,7 +6,7 @@ const KEY = process.env.EXPO_PUBLIC_DISCOGS_CONSUMER_KEY!;
 const SECRET = process.env.EXPO_PUBLIC_DISCOGS_CONSUMER_SECRET!;
 
 const AUTH_HEADER = `Discogs key=${KEY}, secret=${SECRET}`;
-const USER_AGENT = 'VinylVault/1.0 (https://github.com/c-larson/vinylvault)';
+const USER_AGENT = 'DecibelArchive/1.0 (https://github.com/c-larson/vinylvault)';
 
 async function discogsGet<T>(path: string, params?: Record<string, string>): Promise<T> {
   const url = new URL(`${DISCOGS_BASE}${path}`);

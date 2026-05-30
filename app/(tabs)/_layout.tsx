@@ -1,6 +1,13 @@
 import { Tabs } from 'expo-router';
-import { StyleSheet, Platform } from 'react-native';
+import { StyleSheet, Platform, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+
+const HeaderLogo = () => (
+  <Image
+    source={require('../../assets/images/logo.png')}
+    style={{ width: 32, height: 32, marginRight: 12, borderRadius: 6 }}
+  />
+);
 
 export default function TabLayout() {
   return (
@@ -21,6 +28,7 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Vault',
+          headerShown: false,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="albums-outline" size={size} color={color} />
           ),
@@ -30,6 +38,7 @@ export default function TabLayout() {
         name="search"
         options={{
           title: 'Search',
+          headerRight: () => <HeaderLogo />,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="search-outline" size={size} color={color} />
           ),
@@ -39,6 +48,7 @@ export default function TabLayout() {
         name="scan"
         options={{
           title: 'Scan',
+          headerRight: () => <HeaderLogo />,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="scan-outline" size={size} color={color} />
           ),
@@ -48,6 +58,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: 'Profile',
+          headerRight: () => <HeaderLogo />,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="person-outline" size={size} color={color} />
           ),

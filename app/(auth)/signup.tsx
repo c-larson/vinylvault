@@ -53,7 +53,7 @@ export default function SignupScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <View style={styles.inner}>
-        <Text style={styles.logo}>VinylVault</Text>
+        <Text style={styles.logo}>Decibel Archive</Text>
         <Text style={styles.tagline}>Create your account</Text>
 
         <TextInput

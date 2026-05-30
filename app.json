@@ -1,25 +1,27 @@
 {
   "expo": {
-    "name": "VinylVault",
-    "slug": "vinylvault",
+    "name": "Decibel Archive",
+    "slug": "decibel-archive",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "vinylvault",
+    "icon": "./assets/images/icon.png",
+    "scheme": "decibelarchive",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.vinylvault.app",
+      "bundleIdentifier": "com.decibelarchive.app",
       "infoPlist": {
-        "NSCameraUsageDescription": "VinylVault uses your camera to scan record labels and covers for automatic cataloging.",
-        "NSPhotoLibraryUsageDescription": "VinylVault accesses your photo library to let you add images of your records."
+        "NSCameraUsageDescription": "Decibel Archive uses your camera to scan record labels and covers for automatic cataloging.",
+        "NSPhotoLibraryUsageDescription": "Decibel Archive accesses your photo library to let you add images of your records."
       }
     },
     "android": {
-      "package": "com.vinylvault.app",
+      "package": "com.decibelarchive.app",
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.READ_EXTERNAL_STORAGE"
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -32,12 +34,27 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "VinylVault accesses your photos to let you add images of your records."
+          "photosPermission": "Decibel Archive accesses your photos to let you add images of your records."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#0D0D12"
         }
       ]
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "6826c571-0ecd-4011-b237-e6f25a99b973"
+      }
     }
   }
 }

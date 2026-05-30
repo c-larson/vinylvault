@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,36 +10,21 @@ import {
   ScrollView,
   Image,
   Modal,
-  TextInput,
+  PanResponder,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '@/lib/supabase';
-import type { Record, Tag } from '@/types/database';
+import type { Tag } from '@/types/database';
+import { getTrackCellValue, getListCellValue, type TrackRow, type RecordWithTags } from '@/lib/cells';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type ViewMode      = 'grid' | 'table' | 'tracks';
+type ViewMode      = 'grid' | 'table' | 'tracks' | 'playlists';
 type SortDir       = 'asc' | 'desc';
-type FilterKey     = 'artist' | 'title' | 'genre' | 'year' | 'tag';
-type TrackFilterKey = 'artist' | 'album' | 'genre' | 'key' | 'category';
-
-interface RecordWithTags extends Record {
-  tagList: Tag[];
-}
-
-interface TrackRow {
-  id:        string;
-  record_id: string;
-  title:     string;
-  duration:  string | null;
-  bpm:       number | null;
-  key:       string | null;
-  artist:    string;
-  album:     string;
-  genre:     string | null;
-  category:  string;
-}
+type FilterKey     = 'artist' | 'title' | 'genre' | 'year';
+type TrackFilterKey = 'artist' | 'album' | 'genre' | 'key' | 'sets';
 
 interface Col {
   key:     string;
@@ -48,20 +33,25 @@ interface Col {
   visible: boolean;
 }
 
+interface PlaylistCard {
+  id: string;
+  name: string;
+  trackCount: number;
+}
+
 interface FilterState {
   artist: string | null;
   title:  string | null;
   genre:  string | null;
   year:   string | null;
-  tag:    string | null;
 }
 
 interface TrackFilterState {
-  artist:   string | null;
-  album:    string | null;
-  genre:    string | null;
-  key:      string | null;
-  category: string | null;
+  artist: string | null;
+  album:  string | null;
+  genre:  string | null;
+  key:    string | null;
+  sets:   string | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -73,7 +63,6 @@ const DEFAULT_LIST_COLS: Col[] = [
   { key: 'label',      label: 'Label',      width: 120, visible: true },
   { key: 'year',       label: 'Released',   width: 80,  visible: true },
   { key: 'created_at', label: 'Date Added', width: 110, visible: true },
-  { key: 'tag',        label: 'Category',   width: 130, visible: true },
 ];
 
 const DEFAULT_TRACK_COLS: Col[] = [
@@ -83,49 +72,22 @@ const DEFAULT_TRACK_COLS: Col[] = [
   { key: 'genre',    label: 'Genre',    width: 100, visible: true  },
   { key: 'bpm',      label: 'BPM',      width: 72,  visible: true  },
   { key: 'key',      label: 'Key',      width: 72,  visible: true  },
-  { key: 'category', label: 'Category', width: 130, visible: true  },
+  { key: 'sets',     label: 'Sets',     width: 200, visible: true  },
   { key: 'duration', label: 'Duration', width: 90,  visible: false },
 ];
 
 const FILTER_LABELS: Record<FilterKey, string> = {
-  artist: 'Artist', title: 'Album', genre: 'Genre', year: 'Year', tag: 'Category',
+  artist: 'Artist', title: 'Album', genre: 'Genre', year: 'Year',
 };
 
 const TRACK_FILTER_LABELS: Record<TrackFilterKey, string> = {
-  artist: 'Artist', album: 'Album', genre: 'Genre', key: 'Key', category: 'Category',
+  artist: 'Artist', album: 'Album', genre: 'Genre', key: 'Key', sets: 'Sets',
 };
 
-const EMPTY_FILTERS: FilterState       = { artist: null, title: null, genre: null, year: null, tag: null };
-const EMPTY_TRACK_FILTERS: TrackFilterState = { artist: null, album: null, genre: null, key: null, category: null };
+const EMPTY_FILTERS: FilterState            = { artist: null, title: null, genre: null, year: null };
+const EMPTY_TRACK_FILTERS: TrackFilterState = { artist: null, album: null, genre: null, key: null, sets: null };
 
-// ─── Cell value helpers ───────────────────────────────────────────────────────
-
-function getTrackCellValue(t: TrackRow, colKey: string): string {
-  switch (colKey) {
-    case 'title':    return t.title;
-    case 'artist':   return t.artist;
-    case 'album':    return t.album;
-    case 'genre':    return t.genre    ?? '—';
-    case 'bpm':      return t.bpm != null ? String(t.bpm) : '—';
-    case 'key':      return t.key      ?? '—';
-    case 'category': return t.category || '—';
-    case 'duration': return t.duration ?? '—';
-    default:         return '—';
-  }
-}
-
-function getListCellValue(r: RecordWithTags, colKey: string): string {
-  switch (colKey) {
-    case 'artist':     return r.artist;
-    case 'title':      return r.title;
-    case 'genre':      return r.genre ?? '—';
-    case 'label':      return (r as any).label ?? '—';
-    case 'year':       return r.year != null ? String(r.year) : '—';
-    case 'created_at': return new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
-    case 'tag':        return r.tagList.length > 0 ? r.tagList.map(t => t.name).join(', ') : '—';
-    default:           return '—';
-  }
-}
+const MODAL_ROW_HEIGHT = 56;
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -134,10 +96,12 @@ export default function CollectionScreen() {
 
   // Records + tracks
   const [records,    setRecords]    = useState<RecordWithTags[]>([]);
-  const [allTags,    setAllTags]    = useState<Tag[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [tracks,     setTracks]     = useState<TrackRow[]>([]);
+
+  // Playlists
+  const [playlists, setPlaylists] = useState<PlaylistCard[]>([]);
 
   // View mode
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
@@ -154,30 +118,24 @@ export default function CollectionScreen() {
   const [listColModal,   setListColModal]   = useState(false);
   const [trackColModal,  setTrackColModal]  = useState(false);
 
+  // Column drag state (modal drag-to-reorder)
+  const [listDragFrom,  setListDragFrom]  = useState<number | null>(null);
+  const [listDragTo,    setListDragTo]    = useState<number | null>(null);
+  const [trackDragFrom, setTrackDragFrom] = useState<number | null>(null);
+  const [trackDragTo,   setTrackDragTo]   = useState<number | null>(null);
+
+  // Refs so stale pan-responder closures can see the latest cols
+  const listColsRef  = useRef(listCols);
+  listColsRef.current  = listCols;
+  const trackColsRef = useRef(trackCols);
+  trackColsRef.current = trackCols;
+
   // Track filters / sort
   const [trackFilters,      setTrackFilters]      = useState<TrackFilterState>(EMPTY_TRACK_FILTERS);
   const [trackOpenDropdown, setTrackOpenDropdown] = useState<TrackFilterKey | null>(null);
   const [trackSortCol,      setTrackSortCol]      = useState('title');
   const [trackSortDir,      setTrackSortDir]      = useState<SortDir>('asc');
 
-  // ⋮ Three-dot menu
-  const [menuVisible, setMenuVisible] = useState(false);
-
-  // Add custom tag modal
-  const [addTagVisible, setAddTagVisible] = useState(false);
-  const [newTagName,    setNewTagName]    = useState('');
-
-  // Edit custom-cell value modal
-  const [editCellVisible, setEditCellVisible] = useState(false);
-  const [editRowId,       setEditRowId]       = useState('');
-  const [editColKey,      setEditColKey]      = useState('');
-  const [editColLabel,    setEditColLabel]    = useState('');
-  const [editCellText,    setEditCellText]    = useState('');
-  const [editCellTarget,  setEditCellTarget]  = useState<'tracks' | 'list'>('tracks');
-
-  // Custom tag values: { [rowId]: { [colKey]: value } }
-  const [customTrackVals, setCustomTrackVals] = useState<Record<string, Record<string, string>>>({});
-  const [customListVals,  setCustomListVals]  = useState<Record<string, Record<string, string>>>({});
 
   // ─── Fetch ──────────────────────────────────────────────────────────────────
 
@@ -185,15 +143,15 @@ export default function CollectionScreen() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setLoading(false); return; }
 
-    const [recordsRes, tagsRes, recordTagsRes] = await Promise.all([
+    const [recordsRes, tagsRes, recordTagsRes, playlistsRes] = await Promise.all([
       supabase.from('records').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
       supabase.from('tags').select('*').eq('user_id', user.id),
       supabase.from('record_tags').select('record_id, tag_id'),
+      supabase.from('playlists').select('id, name').eq('user_id', user.id).order('created_at'),
     ]);
 
     const tags           = tagsRes.data       ?? [];
     const recordTagLinks = recordTagsRes.data ?? [];
-    setAllTags(tags);
 
     const recs = recordsRes.data ?? [];
     const enriched: RecordWithTags[] = recs.map(r => ({
@@ -205,6 +163,28 @@ export default function CollectionScreen() {
     }));
     setRecords(enriched);
 
+    // Playlists — fetch playlist_tracks for counts AND to build track→sets map
+    const rawPlaylists = playlistsRes.data ?? [];
+    const trackSetsMap: Record<string, string[]> = {};
+    if (rawPlaylists.length > 0) {
+      const { data: ptData } = await supabase
+        .from('playlist_tracks')
+        .select('playlist_id, track_id')
+        .in('playlist_id', rawPlaylists.map(p => p.id));
+      const countMap: Record<string, number> = {};
+      (ptData ?? []).forEach(pt => {
+        countMap[pt.playlist_id] = (countMap[pt.playlist_id] ?? 0) + 1;
+        const name = rawPlaylists.find(p => p.id === pt.playlist_id)?.name ?? '';
+        if (name) {
+          if (!trackSetsMap[pt.track_id]) trackSetsMap[pt.track_id] = [];
+          if (!trackSetsMap[pt.track_id].includes(name)) trackSetsMap[pt.track_id].push(name);
+        }
+      });
+      setPlaylists(rawPlaylists.map(p => ({ id: p.id, name: p.name, trackCount: countMap[p.id] ?? 0 })));
+    } else {
+      setPlaylists([]);
+    }
+
     if (recs.length > 0) {
       const { data: tracksData } = await supabase
         .from('record_tracks').select('*')
@@ -212,19 +192,13 @@ export default function CollectionScreen() {
 
       if (tracksData) {
         const recordMap = Object.fromEntries(recs.map(r => [r.id, r]));
-        const tagMap    = Object.fromEntries(recs.map(r => [
-          r.id,
-          recordTagLinks.filter(rt => rt.record_id === r.id)
-            .map(rt => tags.find(t => t.id === rt.tag_id)?.name)
-            .filter(Boolean).join(', '),
-        ]));
         setTracks(tracksData.map(t => ({
           id: t.id, record_id: t.record_id, title: t.title,
           duration: t.duration ?? null, bpm: t.bpm ?? null, key: t.key ?? null,
-          artist:   recordMap[t.record_id]?.artist ?? '',
-          album:    recordMap[t.record_id]?.title  ?? '',
-          genre:    recordMap[t.record_id]?.genre  ?? null,
-          category: tagMap[t.record_id]            ?? '',
+          artist: recordMap[t.record_id]?.artist ?? '',
+          album:  recordMap[t.record_id]?.title  ?? '',
+          genre:  recordMap[t.record_id]?.genre  ?? null,
+          sets:   (trackSetsMap[t.id] ?? []).join(', '),
         })));
       }
     } else {
@@ -248,8 +222,7 @@ export default function CollectionScreen() {
     title:  [...new Set(records.map(r => r.title))].sort().map(v => ({ label: v, value: v })),
     genre:  [...new Set(records.map(r => r.genre).filter(Boolean) as string[])].sort().map(v => ({ label: v, value: v })),
     year:   [...new Set(records.map(r => r.year).filter(Boolean) as number[])].sort((a, b) => b - a).map(v => ({ label: String(v), value: String(v) })),
-    tag:    allTags.map(t => ({ label: t.name, value: t.id })),
-  }), [records, allTags]);
+  }), [records]);
 
   const filteredRecords = useMemo(() => {
     let result = records.filter(r => {
@@ -257,7 +230,6 @@ export default function CollectionScreen() {
       if (filters.title  && r.title  !== filters.title)  return false;
       if (filters.genre  && r.genre  !== filters.genre)  return false;
       if (filters.year   && String(r.year) !== filters.year) return false;
-      if (filters.tag    && !r.tagList.some(t => t.id === filters.tag)) return false;
       return true;
     });
     if (viewMode === 'table') {
@@ -271,20 +243,20 @@ export default function CollectionScreen() {
   }, [records, filters, viewMode, sortColumn, sortDir]);
 
   const trackFilterOptions = useMemo<Record<TrackFilterKey, Array<{ label: string; value: string }>>>(() => ({
-    artist:   [...new Set(tracks.map(t => t.artist).filter(Boolean))].sort().map(v => ({ label: v, value: v })),
-    album:    [...new Set(tracks.map(t => t.album).filter(Boolean))].sort().map(v => ({ label: v, value: v })),
-    genre:    [...new Set(tracks.map(t => t.genre).filter(Boolean) as string[])].sort().map(v => ({ label: v, value: v })),
-    key:      [...new Set(tracks.map(t => t.key).filter(Boolean) as string[])].sort().map(v => ({ label: v, value: v })),
-    category: [...new Set(tracks.map(t => t.category).filter(Boolean))].sort().map(v => ({ label: v, value: v })),
+    artist: [...new Set(tracks.map(t => t.artist).filter(Boolean))].sort().map(v => ({ label: v, value: v })),
+    album:  [...new Set(tracks.map(t => t.album).filter(Boolean))].sort().map(v => ({ label: v, value: v })),
+    genre:  [...new Set(tracks.map(t => t.genre).filter(Boolean) as string[])].sort().map(v => ({ label: v, value: v })),
+    key:    [...new Set(tracks.map(t => t.key).filter(Boolean) as string[])].sort().map(v => ({ label: v, value: v })),
+    sets:   [...new Set(tracks.flatMap(t => t.sets ? t.sets.split(', ') : []).filter(Boolean))].sort().map(v => ({ label: v, value: v })),
   }), [tracks]);
 
   const filteredTracks = useMemo(() => {
     let result = tracks.filter(t => {
-      if (trackFilters.artist   && t.artist   !== trackFilters.artist)   return false;
-      if (trackFilters.album    && t.album    !== trackFilters.album)    return false;
-      if (trackFilters.genre    && t.genre    !== trackFilters.genre)    return false;
-      if (trackFilters.key      && t.key      !== trackFilters.key)      return false;
-      if (trackFilters.category && !t.category.includes(trackFilters.category)) return false;
+      if (trackFilters.artist && t.artist !== trackFilters.artist) return false;
+      if (trackFilters.album  && t.album  !== trackFilters.album)  return false;
+      if (trackFilters.genre  && t.genre  !== trackFilters.genre)  return false;
+      if (trackFilters.key    && t.key    !== trackFilters.key)    return false;
+      if (trackFilters.sets   && !t.sets.split(', ').includes(trackFilters.sets)) return false;
       return true;
     });
     return [...result].sort((a, b) => {
@@ -300,6 +272,23 @@ export default function CollectionScreen() {
 
   const visibleListCols  = listCols.filter(c => c.visible);
   const visibleTrackCols = trackCols.filter(c => c.visible);
+
+  // Reordered col arrays to show drag preview in modals
+  const displayListCols = useMemo(() => {
+    if (listDragFrom === null || listDragTo === null || listDragFrom === listDragTo) return listCols;
+    const arr = [...listCols];
+    const [moved] = arr.splice(listDragFrom, 1);
+    arr.splice(listDragTo, 0, moved);
+    return arr;
+  }, [listCols, listDragFrom, listDragTo]);
+
+  const displayTrackCols = useMemo(() => {
+    if (trackDragFrom === null || trackDragTo === null || trackDragFrom === trackDragTo) return trackCols;
+    const arr = [...trackCols];
+    const [moved] = arr.splice(trackDragFrom, 1);
+    arr.splice(trackDragTo, 0, moved);
+    return arr;
+  }, [trackCols, trackDragFrom, trackDragTo]);
 
   // ─── Handlers ────────────────────────────────────────────────────────────────
 
@@ -323,79 +312,9 @@ export default function CollectionScreen() {
     else { setTrackSortCol(col); setTrackSortDir('asc'); }
   }
 
-  // Column config: List view
-  function moveListCol(i: number, dir: 'up' | 'down') {
-    setListCols(prev => {
-      const next = [...prev];
-      const t = dir === 'up' ? i - 1 : i + 1;
-      if (t < 0 || t >= next.length) return prev;
-      [next[i], next[t]] = [next[t], next[i]];
-      return next;
-    });
-  }
-  function toggleListColVisible(i: number) {
-    setListCols(prev => prev.map((c, idx) => idx === i ? { ...c, visible: !c.visible } : c));
-  }
-
-  // Column config: Track / Songs view
-  function moveTrackCol(i: number, dir: 'up' | 'down') {
-    setTrackCols(prev => {
-      const next = [...prev];
-      const t = dir === 'up' ? i - 1 : i + 1;
-      if (t < 0 || t >= next.length) return prev;
-      [next[i], next[t]] = [next[t], next[i]];
-      return next;
-    });
-  }
-  function toggleTrackColVisible(i: number) {
-    setTrackCols(prev => prev.map((c, idx) => idx === i ? { ...c, visible: !c.visible } : c));
-  }
-
-  // ⋮ Menu: open the right modal based on which option the user tapped
-  function handleMenuAdjustCols() {
-    setMenuVisible(false);
+  function handleAdjustCols() {
     if (viewMode === 'table')  setListColModal(true);
     if (viewMode === 'tracks') setTrackColModal(true);
-  }
-
-  function handleMenuAddTag() {
-    setMenuVisible(false);
-    setNewTagName('');
-    setAddTagVisible(true);
-  }
-
-  function confirmAddTag() {
-    const name = newTagName.trim();
-    if (!name) return;
-    const newCol: Col = { key: `custom_${Date.now()}`, label: name, width: 130, visible: true };
-    if (viewMode === 'table')  setListCols(prev => [...prev, newCol]);
-    if (viewMode === 'tracks') setTrackCols(prev => [...prev, newCol]);
-    setAddTagVisible(false);
-  }
-
-  // Edit a custom-column cell value
-  function openEditCell(rowId: string, colKey: string, colLabel: string, currentVal: string, target: 'tracks' | 'list') {
-    setEditRowId(rowId);
-    setEditColKey(colKey);
-    setEditColLabel(colLabel);
-    setEditCellText(currentVal);
-    setEditCellTarget(target);
-    setEditCellVisible(true);
-  }
-
-  function confirmEditCell() {
-    if (editCellTarget === 'tracks') {
-      setCustomTrackVals(prev => ({
-        ...prev,
-        [editRowId]: { ...(prev[editRowId] ?? {}), [editColKey]: editCellText.trim() },
-      }));
-    } else {
-      setCustomListVals(prev => ({
-        ...prev,
-        [editRowId]: { ...(prev[editRowId] ?? {}), [editColKey]: editCellText.trim() },
-      }));
-    }
-    setEditCellVisible(false);
   }
 
   const activeFilterCount      = Object.values(filters).filter(Boolean).length;
@@ -414,7 +333,7 @@ export default function CollectionScreen() {
   // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
 
       {/* ── Header ──────────────────────────────────────────────────────────── */}
       <View style={styles.header}>
@@ -441,7 +360,18 @@ export default function CollectionScreen() {
             <Ionicons name="musical-notes-outline" size={15} color={viewMode === 'tracks' ? '#DFFF00' : '#555'} />
             <Text style={[styles.toggleLabel, viewMode === 'tracks' && styles.toggleLabelActive]}>Songs</Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.toggleBtn, viewMode === 'playlists' && styles.toggleBtnActive]}
+            onPress={() => setViewMode('playlists')}
+          >
+            <Ionicons name="bookmark-outline" size={15} color={viewMode === 'playlists' ? '#DFFF00' : '#555'} />
+            <Text style={[styles.toggleLabel, viewMode === 'playlists' && styles.toggleLabelActive]}>Sets</Text>
+          </TouchableOpacity>
         </View>
+        <Image
+          source={require('../../assets/images/logo.png')}
+          style={styles.headerLogo}
+        />
       </View>
 
       {/* ── Filter bar (with ⋮ button for List + Songs) ──────────────────────── */}
@@ -455,11 +385,9 @@ export default function CollectionScreen() {
           {viewMode !== 'tracks' ? (
             /* Record filters */
             <>
-              {(['artist', 'title', 'genre', 'year', 'tag'] as FilterKey[]).map(key => {
+              {(['artist', 'title', 'genre', 'year'] as FilterKey[]).map(key => {
                 const active = filters[key];
-                const displayVal = active
-                  ? (key === 'tag' ? (allTags.find(t => t.id === active)?.name ?? active) : active)
-                  : null;
+                const displayVal = active ? active : null;
                 return (
                   <TouchableOpacity
                     key={key}
@@ -481,7 +409,7 @@ export default function CollectionScreen() {
           ) : (
             /* Track filters */
             <>
-              {(['artist', 'album', 'genre', 'key', 'category'] as TrackFilterKey[]).map(key => {
+              {(['artist', 'album', 'genre', 'key', 'sets'] as TrackFilterKey[]).map(key => {
                 const active = trackFilters[key];
                 return (
                   <TouchableOpacity
@@ -504,23 +432,25 @@ export default function CollectionScreen() {
           )}
         </ScrollView>
 
-        {/* ⋮ button — only shown in List and Songs views */}
+        {/* Adjust Columns button — only shown in List and Songs views */}
         {(viewMode === 'table' || viewMode === 'tracks') && (
-          <TouchableOpacity style={styles.menuDotBtn} onPress={() => setMenuVisible(true)}>
-            <Ionicons name="ellipsis-vertical" size={20} color="#888" />
+          <TouchableOpacity style={styles.menuDotBtn} onPress={handleAdjustCols}>
+            <Ionicons name="options-outline" size={20} color="#888" />
           </TouchableOpacity>
         )}
       </View>
 
       {/* ── Count ───────────────────────────────────────────────────────────── */}
       <Text style={styles.countText}>
-        {viewMode === 'tracks'
-          ? filteredTracks.length === tracks.length
-            ? `${tracks.length} song${tracks.length !== 1 ? 's' : ''}`
-            : `${filteredTracks.length} of ${tracks.length} songs`
-          : filteredRecords.length === records.length
-            ? `${records.length} record${records.length !== 1 ? 's' : ''}`
-            : `${filteredRecords.length} of ${records.length} records`
+        {viewMode === 'playlists'
+          ? `${playlists.length} set${playlists.length !== 1 ? 's' : ''}`
+          : viewMode === 'tracks'
+            ? filteredTracks.length === tracks.length
+              ? `${tracks.length} song${tracks.length !== 1 ? 's' : ''}`
+              : `${filteredTracks.length} of ${tracks.length} songs`
+            : filteredRecords.length === records.length
+              ? `${records.length} record${records.length !== 1 ? 's' : ''}`
+              : `${filteredRecords.length} of ${records.length} records`
         }
       </Text>
 
@@ -538,6 +468,7 @@ export default function CollectionScreen() {
 
         /* ── Art view ───────────────────────────────────────────────────── */
         <FlatList
+          key="art-view"
           data={filteredRecords}
           keyExtractor={item => item.id}
           numColumns={2}
@@ -557,6 +488,41 @@ export default function CollectionScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#DFFF00" />}
         />
 
+      ) : viewMode === 'playlists' ? (
+
+        /* ── Playlists view ─────────────────────────────────────────────── */
+        playlists.length === 0 ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>🎵</Text>
+            <Text style={styles.emptyTitle}>No sets yet</Text>
+            <Text style={styles.emptySubtitle}>Tap + Set on any track to start one</Text>
+          </View>
+        ) : (
+          <FlatList
+            key="playlist-view"
+            data={playlists}
+            keyExtractor={item => item.id}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.playlistCard}
+                onPress={() => router.push(`/playlist/${item.id}` as any)}
+                activeOpacity={0.8}
+              >
+                <View style={styles.playlistCardIcon}>
+                  <Ionicons name="bookmark" size={22} color="#DFFF00" />
+                </View>
+                <View style={styles.playlistCardInfo}>
+                  <Text style={styles.playlistCardName}>{item.name}</Text>
+                  <Text style={styles.playlistCardCount}>{item.trackCount} track{item.trackCount !== 1 ? 's' : ''}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#444" />
+              </TouchableOpacity>
+            )}
+            contentContainerStyle={styles.playlistList}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#DFFF00" />}
+          />
+        )
+
       ) : viewMode === 'table' ? (
 
         /* ── List view ──────────────────────────────────────────────────── */
@@ -569,7 +535,7 @@ export default function CollectionScreen() {
                   <TouchableOpacity
                     key={col.key}
                     style={[styles.tableHeaderCell, { width: col.width }]}
-                    onPress={() => !col.key.startsWith('custom_') && handleSort(col.key)}
+                    onPress={() => handleSort(col.key)}
                   >
                     <Text style={styles.tableHeaderText}>
                       {col.label}{sortColumn === col.key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
@@ -577,7 +543,7 @@ export default function CollectionScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
-              {/* Data rows — each cell is individually tappable */}
+              {/* Data rows */}
               {filteredRecords.length === 0 ? (
                 <View style={styles.tableEmpty}>
                   <Text style={styles.tableEmptyText}>No records match the current filters.</Text>
@@ -585,34 +551,17 @@ export default function CollectionScreen() {
               ) : (
                 filteredRecords.map((item, index) => (
                   <View key={item.id} style={[styles.tableRow, index % 2 === 1 && styles.tableRowAlt]}>
-                    {visibleListCols.map(col => {
-                      const isCustom = col.key.startsWith('custom_');
-                      const val = isCustom
-                        ? (customListVals[item.id]?.[col.key] ?? '')
-                        : getListCellValue(item, col.key);
-                      return (
-                        <TouchableOpacity
-                          key={col.key}
-                          style={{ width: col.width }}
-                          onPress={() => isCustom
-                            ? openEditCell(item.id, col.key, col.label, val, 'list')
-                            : router.push(`/record/${item.id}`)
-                          }
-                        >
-                          <Text
-                            style={[
-                              styles.tableCell,
-                              { width: col.width },
-                              isCustom && styles.tableCellCustom,
-                              isCustom && !val && styles.tableCellCustomEmpty,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {isCustom ? (val || 'Tap to add…') : val}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                    {visibleListCols.map(col => (
+                      <TouchableOpacity
+                        key={col.key}
+                        style={{ width: col.width }}
+                        onPress={() => router.push(`/record/${item.id}`)}
+                      >
+                        <Text style={[styles.tableCell, { width: col.width }]} numberOfLines={1}>
+                          {getListCellValue(item, col.key)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
                   </View>
                 ))
               )}
@@ -620,7 +569,7 @@ export default function CollectionScreen() {
           </ScrollView>
         </ScrollView>
 
-      ) : (
+      ) : viewMode === 'tracks' ? (
 
         /* ── Songs view ─────────────────────────────────────────────────── */
         <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#DFFF00" />}>
@@ -632,7 +581,7 @@ export default function CollectionScreen() {
                   <TouchableOpacity
                     key={col.key}
                     style={[styles.tableHeaderCell, { width: col.width }]}
-                    onPress={() => !col.key.startsWith('custom_') && handleTrackSort(col.key)}
+                    onPress={() => handleTrackSort(col.key)}
                   >
                     <Text style={styles.tableHeaderText}>
                       {col.label}{trackSortCol === col.key ? (trackSortDir === 'asc' ? ' ↑' : ' ↓') : ''}
@@ -650,126 +599,37 @@ export default function CollectionScreen() {
               ) : (
                 filteredTracks.map((track, index) => (
                   <View key={track.id} style={[styles.tableRow, index % 2 === 1 && styles.tableRowAlt]}>
-                    {visibleTrackCols.map(col => {
-                      const isCustom = col.key.startsWith('custom_');
-                      const val = isCustom
-                        ? (customTrackVals[track.id]?.[col.key] ?? '')
-                        : getTrackCellValue(track, col.key);
-                      return (
-                        <TouchableOpacity
-                          key={col.key}
-                          style={{ width: col.width }}
-                          onPress={() => isCustom
-                            ? openEditCell(track.id, col.key, col.label, val, 'tracks')
-                            : router.push(`/record/${track.record_id}`)
-                          }
+                    {visibleTrackCols.map(col => (
+                      <TouchableOpacity
+                        key={col.key}
+                        style={{ width: col.width }}
+                        onPress={() => router.push(`/record/${track.record_id}`)}
+                      >
+                        <Text
+                          style={[
+                            styles.tableCell,
+                            { width: col.width },
+                            col.key === 'key'  && !!track.key  && styles.tableCellKey,
+                            col.key === 'bpm'  && !!track.bpm  && styles.tableCellBpm,
+                            col.key === 'sets' && !!track.sets && styles.tableCellSets,
+                          ]}
+                          numberOfLines={1}
                         >
-                          <Text
-                            style={[
-                              styles.tableCell,
-                              { width: col.width },
-                              col.key === 'key' && track.key  && styles.tableCellKey,
-                              col.key === 'bpm' && track.bpm  && styles.tableCellBpm,
-                              isCustom && styles.tableCellCustom,
-                              isCustom && !val && styles.tableCellCustomEmpty,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {isCustom ? (val || 'Tap to add…') : val}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                          {getTrackCellValue(track, col.key)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
                   </View>
                 ))
               )}
             </View>
           </ScrollView>
         </ScrollView>
-      )}
+      ) : null}
 
       {/* ════════════════════════════════════════════════════════════════════
           Modals
       ════════════════════════════════════════════════════════════════════ */}
-
-      {/* ── ⋮ Dropdown menu ─────────────────────────────────────────────── */}
-      <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
-        <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
-          <View style={styles.menuCard} onStartShouldSetResponder={() => true}>
-            <TouchableOpacity style={styles.menuItem} onPress={handleMenuAdjustCols}>
-              <Ionicons name="options-outline" size={18} color="#DFFF00" />
-              <Text style={styles.menuItemText}>Adjust Columns</Text>
-            </TouchableOpacity>
-            <View style={styles.menuDivider} />
-            <TouchableOpacity style={styles.menuItem} onPress={handleMenuAddTag}>
-              <Ionicons name="pricetag-outline" size={18} color="#DFFF00" />
-              <Text style={styles.menuItemText}>Add a custom tag</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* ── Add custom tag (name input) ──────────────────────────────────── */}
-      <Modal visible={addTagVisible} transparent animationType="fade" onRequestClose={() => setAddTagVisible(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAddTagVisible(false)}>
-          <View style={styles.inputCard} onStartShouldSetResponder={() => true}>
-            <Text style={styles.inputCardTitle}>Add Custom Column</Text>
-            <Text style={styles.inputCardHint}>
-              Name your new column — you can fill in values for each {viewMode === 'tracks' ? 'song' : 'record'} after.
-            </Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="e.g. Mood, Playlist, Notes…"
-              placeholderTextColor="#555"
-              value={newTagName}
-              onChangeText={setNewTagName}
-              autoFocus
-              returnKeyType="done"
-              onSubmitEditing={confirmAddTag}
-            />
-            <View style={styles.inputCardActions}>
-              <TouchableOpacity style={styles.inputCardCancel} onPress={() => setAddTagVisible(false)}>
-                <Text style={styles.inputCardCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.inputCardConfirm, !newTagName.trim() && styles.inputCardConfirmDisabled]}
-                onPress={confirmAddTag}
-                disabled={!newTagName.trim()}
-              >
-                <Text style={styles.inputCardConfirmText}>Add Column</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* ── Edit custom cell value ───────────────────────────────────────── */}
-      <Modal visible={editCellVisible} transparent animationType="fade" onRequestClose={() => setEditCellVisible(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setEditCellVisible(false)}>
-          <View style={styles.inputCard} onStartShouldSetResponder={() => true}>
-            <Text style={styles.inputCardTitle}>{editColLabel}</Text>
-            <Text style={styles.inputCardHint}>Enter a custom tag for this {editCellTarget === 'tracks' ? 'song' : 'record'}.</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="Type a value…"
-              placeholderTextColor="#555"
-              value={editCellText}
-              onChangeText={setEditCellText}
-              autoFocus
-              returnKeyType="done"
-              onSubmitEditing={confirmEditCell}
-            />
-            <View style={styles.inputCardActions}>
-              <TouchableOpacity style={styles.inputCardCancel} onPress={() => setEditCellVisible(false)}>
-                <Text style={styles.inputCardCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.inputCardConfirm} onPress={confirmEditCell}>
-                <Text style={styles.inputCardConfirmText}>Save</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </TouchableOpacity>
-      </Modal>
 
       {/* ── Record filter dropdown ───────────────────────────────────────── */}
       <Modal visible={openDropdown !== null} transparent animationType="fade" onRequestClose={() => setOpenDropdown(null)}>
@@ -816,72 +676,126 @@ export default function CollectionScreen() {
       </Modal>
 
       {/* ── List column config ───────────────────────────────────────────── */}
-      <Modal visible={listColModal} transparent animationType="slide" onRequestClose={() => setListColModal(false)}>
+      <Modal visible={listColModal} transparent animationType="slide" onRequestClose={() => { setListColModal(false); setListDragFrom(null); setListDragTo(null); }}>
         <View style={styles.colModalBackdrop}>
           <View style={styles.colModalSheet}>
             <View style={styles.colModalHeader}>
               <Text style={styles.colModalTitle}>List Columns</Text>
-              <TouchableOpacity onPress={() => setListColModal(false)}>
+              <TouchableOpacity onPress={() => { setListColModal(false); setListDragFrom(null); setListDragTo(null); }}>
                 <Text style={styles.colModalDone}>Done</Text>
               </TouchableOpacity>
             </View>
-            <Text style={styles.colModalHint}>Tap the eye to show/hide · arrows to reorder</Text>
-            <ScrollView>
-              {listCols.map((col, i) => (
-                <View key={col.key} style={styles.colRow}>
-                  <TouchableOpacity onPress={() => toggleListColVisible(i)} style={styles.colEye}>
-                    <Ionicons name={col.visible ? 'eye-outline' : 'eye-off-outline'} size={20} color={col.visible ? '#DFFF00' : '#444'} />
-                  </TouchableOpacity>
-                  <Text style={[styles.colLabel, !col.visible && styles.colLabelHidden]}>{col.label}</Text>
-                  <View style={styles.colArrows}>
-                    <TouchableOpacity onPress={() => moveListCol(i, 'up')} disabled={i === 0} style={styles.colArrowBtn}>
-                      <Ionicons name="chevron-up-outline" size={20} color={i === 0 ? '#333' : '#aaa'} />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => moveListCol(i, 'down')} disabled={i === listCols.length - 1} style={styles.colArrowBtn}>
-                      <Ionicons name="chevron-down-outline" size={20} color={i === listCols.length - 1 ? '#333' : '#aaa'} />
-                    </TouchableOpacity>
+            <Text style={styles.colModalHint}>Drag ≡ to reorder</Text>
+            <ScrollView scrollEnabled={listDragFrom === null}>
+              {displayListCols.map((col, displayIdx) => {
+                const isDragging = listDragFrom !== null && displayListCols[listDragFrom === listDragTo ? listDragFrom : listDragTo ?? listDragFrom]?.key === col.key;
+                const pan = PanResponder.create({
+                  onStartShouldSetPanResponderCapture: () => true,
+                  onMoveShouldSetPanResponder: () => true,
+                  onPanResponderGrant: () => {
+                    setListDragFrom(displayIdx);
+                    setListDragTo(displayIdx);
+                  },
+                  onPanResponderMove: (_, gs) => {
+                    const newTo = Math.min(
+                      Math.max(0, Math.round(displayIdx + gs.dy / MODAL_ROW_HEIGHT)),
+                      listColsRef.current.length - 1,
+                    );
+                    setListDragTo(newTo);
+                  },
+                  onPanResponderRelease: (_, gs) => {
+                    const finalTo = Math.min(
+                      Math.max(0, Math.round(displayIdx + gs.dy / MODAL_ROW_HEIGHT)),
+                      listColsRef.current.length - 1,
+                    );
+                    if (finalTo !== displayIdx) {
+                      const arr = [...listColsRef.current];
+                      const [moved] = arr.splice(displayIdx, 1);
+                      arr.splice(finalTo, 0, moved);
+                      setListCols(arr);
+                    }
+                    setListDragFrom(null);
+                    setListDragTo(null);
+                  },
+                });
+                return (
+                  <View
+                    key={col.key}
+                    style={[styles.colRow, isDragging && styles.colRowDragging]}
+                  >
+                    <View {...pan.panHandlers} style={styles.colDragHandle}>
+                      <Ionicons name="menu-outline" size={22} color="#888" />
+                    </View>
+                    <Text style={styles.colLabel}>{col.label}</Text>
                   </View>
-                </View>
-              ))}
+                );
+              })}
             </ScrollView>
           </View>
         </View>
       </Modal>
 
       {/* ── Track column config ──────────────────────────────────────────── */}
-      <Modal visible={trackColModal} transparent animationType="slide" onRequestClose={() => setTrackColModal(false)}>
+      <Modal visible={trackColModal} transparent animationType="slide" onRequestClose={() => { setTrackColModal(false); setTrackDragFrom(null); setTrackDragTo(null); }}>
         <View style={styles.colModalBackdrop}>
           <View style={styles.colModalSheet}>
             <View style={styles.colModalHeader}>
               <Text style={styles.colModalTitle}>Song Columns</Text>
-              <TouchableOpacity onPress={() => setTrackColModal(false)}>
+              <TouchableOpacity onPress={() => { setTrackColModal(false); setTrackDragFrom(null); setTrackDragTo(null); }}>
                 <Text style={styles.colModalDone}>Done</Text>
               </TouchableOpacity>
             </View>
-            <Text style={styles.colModalHint}>Tap the eye to show/hide · arrows to reorder</Text>
-            <ScrollView>
-              {trackCols.map((col, i) => (
-                <View key={col.key} style={styles.colRow}>
-                  <TouchableOpacity onPress={() => toggleTrackColVisible(i)} style={styles.colEye}>
-                    <Ionicons name={col.visible ? 'eye-outline' : 'eye-off-outline'} size={20} color={col.visible ? '#DFFF00' : '#444'} />
-                  </TouchableOpacity>
-                  <Text style={[styles.colLabel, !col.visible && styles.colLabelHidden]}>{col.label}</Text>
-                  <View style={styles.colArrows}>
-                    <TouchableOpacity onPress={() => moveTrackCol(i, 'up')} disabled={i === 0} style={styles.colArrowBtn}>
-                      <Ionicons name="chevron-up-outline" size={20} color={i === 0 ? '#333' : '#aaa'} />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => moveTrackCol(i, 'down')} disabled={i === trackCols.length - 1} style={styles.colArrowBtn}>
-                      <Ionicons name="chevron-down-outline" size={20} color={i === trackCols.length - 1 ? '#333' : '#aaa'} />
-                    </TouchableOpacity>
+            <Text style={styles.colModalHint}>Drag ≡ to reorder</Text>
+            <ScrollView scrollEnabled={trackDragFrom === null}>
+              {displayTrackCols.map((col, displayIdx) => {
+                const isDragging = trackDragFrom !== null && displayTrackCols[trackDragFrom === trackDragTo ? trackDragFrom : trackDragTo ?? trackDragFrom]?.key === col.key;
+                const pan = PanResponder.create({
+                  onStartShouldSetPanResponderCapture: () => true,
+                  onMoveShouldSetPanResponder: () => true,
+                  onPanResponderGrant: () => {
+                    setTrackDragFrom(displayIdx);
+                    setTrackDragTo(displayIdx);
+                  },
+                  onPanResponderMove: (_, gs) => {
+                    const newTo = Math.min(
+                      Math.max(0, Math.round(displayIdx + gs.dy / MODAL_ROW_HEIGHT)),
+                      trackColsRef.current.length - 1,
+                    );
+                    setTrackDragTo(newTo);
+                  },
+                  onPanResponderRelease: (_, gs) => {
+                    const finalTo = Math.min(
+                      Math.max(0, Math.round(displayIdx + gs.dy / MODAL_ROW_HEIGHT)),
+                      trackColsRef.current.length - 1,
+                    );
+                    if (finalTo !== displayIdx) {
+                      const arr = [...trackColsRef.current];
+                      const [moved] = arr.splice(displayIdx, 1);
+                      arr.splice(finalTo, 0, moved);
+                      setTrackCols(arr);
+                    }
+                    setTrackDragFrom(null);
+                    setTrackDragTo(null);
+                  },
+                });
+                return (
+                  <View
+                    key={col.key}
+                    style={[styles.colRow, isDragging && styles.colRowDragging]}
+                  >
+                    <View {...pan.panHandlers} style={styles.colDragHandle}>
+                      <Ionicons name="menu-outline" size={22} color="#888" />
+                    </View>
+                    <Text style={styles.colLabel}>{col.label}</Text>
                   </View>
-                </View>
-              ))}
+                );
+              })}
             </ScrollView>
           </View>
         </View>
       </Modal>
 
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -898,8 +812,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#2A2A3A',
   },
   headerTitle:    { color: '#fff', fontSize: 20, fontWeight: '800' },
+  headerLogo:     { width: 32, height: 32, borderRadius: 6, marginLeft: 10 },
   viewToggle:     { flexDirection: 'row', gap: 4 },
-  toggleBtn:      { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#2A2A3A' },
+  toggleBtn:      { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6, paddingHorizontal: 8, borderRadius: 8, borderWidth: 1, borderColor: '#2A2A3A' },
   toggleBtnActive:{ borderColor: '#DFFF00' },
   toggleLabel:    { fontSize: 12, fontWeight: '600', color: '#555' },
   toggleLabelActive: { color: '#DFFF00' },
@@ -915,7 +830,7 @@ const styles = StyleSheet.create({
   clearChip:        { paddingHorizontal: 12, paddingVertical: 6 },
   clearChipText:    { color: '#666', fontSize: 13, textDecorationLine: 'underline' },
 
-  // ⋮ button
+  // Adjust Columns button
   menuDotBtn: {
     width: 44, height: 56, justifyContent: 'center', alignItems: 'center',
     borderLeftWidth: 1, borderLeftColor: '#2A2A3A',
@@ -947,47 +862,14 @@ const styles = StyleSheet.create({
   tableRow:        { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#2A2A3A' },
   tableRowAlt:     { backgroundColor: '#1C1C24' },
   tableCell:       { color: '#ccc', fontSize: 13, paddingHorizontal: 12, paddingVertical: 12 },
-  tableCellKey:    { color: '#7FFFD4', fontWeight: '700' },
-  tableCellBpm:    { color: '#DFFF00', fontWeight: '600' },
-  tableCellCustom: { color: '#aaa', fontStyle: 'italic' },
-  tableCellCustomEmpty: { color: '#444' },
+  tableCellKey:  { color: '#7FFFD4', fontWeight: '700' },
+  tableCellBpm:  { color: '#DFFF00', fontWeight: '600' },
+  tableCellSets: { color: '#B39DDB', fontWeight: '500' },
   tableEmpty:      { padding: 32, alignItems: 'center' },
   tableEmptyText:  { color: '#555', fontSize: 14 },
 
-  // ⋮ Dropdown menu
-  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
-  menuCard: {
-    position: 'absolute', top: 128, right: 8,
-    backgroundColor: '#1C1C24', borderRadius: 14, borderWidth: 1, borderColor: '#2A2A3A',
-    minWidth: 210, overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4, shadowRadius: 12, elevation: 12,
-  },
-  menuItem:     { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 15 },
-  menuItemText: { color: '#fff', fontSize: 15, fontWeight: '500' },
-  menuDivider:  { height: 1, backgroundColor: '#2A2A3A' },
-
   // Shared modal overlay
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 32 },
-
-  // Input card (add tag + edit cell)
-  inputCard: {
-    backgroundColor: '#1C1C24', borderRadius: 20, borderWidth: 1, borderColor: '#2A2A3A',
-    width: '100%', padding: 24,
-  },
-  inputCardTitle: { color: '#fff', fontSize: 18, fontWeight: '700', marginBottom: 6 },
-  inputCardHint:  { color: '#666', fontSize: 13, marginBottom: 16 },
-  textInput: {
-    backgroundColor: '#0D0D12', borderRadius: 10, borderWidth: 1, borderColor: '#2A2A3A',
-    color: '#fff', fontSize: 16, paddingHorizontal: 14, paddingVertical: 12,
-    marginBottom: 20,
-  },
-  inputCardActions:       { flexDirection: 'row', gap: 10 },
-  inputCardCancel:        { flex: 1, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: '#2A2A3A', alignItems: 'center' },
-  inputCardCancelText:    { color: '#aaa', fontSize: 15, fontWeight: '600' },
-  inputCardConfirm:       { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#DFFF00', alignItems: 'center' },
-  inputCardConfirmDisabled: { opacity: 0.35 },
-  inputCardConfirmText:   { color: '#0D0D12', fontSize: 15, fontWeight: '700' },
 
   // Filter dropdown
   dropdown:         { backgroundColor: '#1C1C24', borderRadius: 16, borderWidth: 1, borderColor: '#2A2A3A', width: '100%', maxHeight: 400, overflow: 'hidden' },
@@ -998,6 +880,14 @@ const styles = StyleSheet.create({
   dropdownOptionText:  { color: '#fff', fontSize: 15 },
   dropdownOptionActive:{ color: '#DFFF00', fontWeight: '600' },
   dropdownCheck:       { color: '#DFFF00', fontSize: 16 },
+
+  // Playlist cards
+  playlistList:      { padding: 12 },
+  playlistCard:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1C1C24', borderRadius: 12, padding: 16, marginBottom: 10, borderWidth: 1, borderColor: '#2A2A3A' },
+  playlistCardIcon:  { width: 44, height: 44, borderRadius: 22, backgroundColor: '#0D0D12', justifyContent: 'center', alignItems: 'center', marginRight: 12, borderWidth: 1, borderColor: '#2A2A3A' },
+  playlistCardInfo:  { flex: 1 },
+  playlistCardName:  { color: '#fff', fontSize: 16, fontWeight: '700', marginBottom: 2 },
+  playlistCardCount: { color: '#666', fontSize: 13 },
 
   // Column config modal (shared by List + Songs)
   colModalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end' },
@@ -1011,9 +901,7 @@ const styles = StyleSheet.create({
   colModalDone:    { color: '#DFFF00', fontSize: 16, fontWeight: '600' },
   colModalHint:    { color: '#555', fontSize: 12, paddingHorizontal: 20, paddingBottom: 10 },
   colRow:          { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#2A2A3A' },
-  colEye:          { marginRight: 14 },
+  colRowDragging:  { backgroundColor: '#1a1a2e', opacity: 0.85 },
   colLabel:        { flex: 1, color: '#fff', fontSize: 16 },
-  colLabelHidden:  { color: '#444' },
-  colArrows:       { flexDirection: 'row', gap: 4 },
-  colArrowBtn:     { padding: 6 },
+  colDragHandle:   { paddingHorizontal: 8, paddingVertical: 4, marginRight: 12 },
 });

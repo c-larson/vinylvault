@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   TextInput,
   Modal,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Audio } from 'expo-av';
@@ -19,7 +20,7 @@ import { supabase } from '@/lib/supabase';
 import { getPriceSuggestions } from '@/lib/discogs';
 import { Ionicons } from '@expo/vector-icons';
 import { ConditionBadge } from '@/components/ConditionBadge';
-import type { Record, RecordTrack, GoldmineCondition } from '@/types/database';
+import type { VinylRecord, RecordTrack, GoldmineCondition } from '@/types/database';
 
 // Goldmine condition multipliers for condition-adjusted valuation
 const CONDITION_MULTIPLIERS: Record<GoldmineCondition, number> = {
@@ -36,10 +37,11 @@ const CONDITION_MULTIPLIERS: Record<GoldmineCondition, number> = {
 export default function RecordDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const [record, setRecord] = useState<Record | null>(null);
+  const [record, setRecord] = useState<VinylRecord | null>(null);
   const [tracks, setTracks] = useState<RecordTrack[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  const [playlistCountMap, setPlaylistCountMap] = useState<Record<string, number>>({});
 
   useEffect(() => {
     async function fetchRecord() {
@@ -49,7 +51,19 @@ export default function RecordDetailScreen() {
       ]);
       if (recordResult.data) setRecord(recordResult.data);
       if (recordResult.error) Alert.alert('Error', 'Could not load record.');
-      if (tracksResult.data) setTracks(tracksResult.data);
+      if (tracksResult.data) {
+        setTracks(tracksResult.data);
+        // Fetch how many playlists each track belongs to
+        const { data: ptData } = await supabase
+          .from('playlist_tracks')
+          .select('track_id')
+          .in('track_id', tracksResult.data.map(t => t.id));
+        const countMap: Record<string, number> = {};
+        (ptData ?? []).forEach(pt => {
+          countMap[pt.track_id] = (countMap[pt.track_id] ?? 0) + 1;
+        });
+        setPlaylistCountMap(countMap);
+      }
       setLoading(false);
     }
     fetchRecord();
@@ -198,6 +212,10 @@ export default function RecordDetailScreen() {
               <TrackRow
                 key={track.id ?? i}
                 track={track}
+                playlistCount={playlistCountMap[track.id] ?? 0}
+                onPlaylistCountChange={(count) =>
+                  setPlaylistCountMap(prev => ({ ...prev, [track.id]: count }))
+                }
                 onBpmSave={async (bpm) => {
                   const { error } = await supabase
                     .from('record_tracks')
@@ -712,18 +730,194 @@ function KeyBadge({
   );
 }
 
+// ─── PlaylistPickerModal ──────────────────────────────────────────────────────
+function PlaylistPickerModal({
+  visible,
+  trackId,
+  onClose,
+  onCountChange,
+}: {
+  visible: boolean;
+  trackId: string;
+  onClose: () => void;
+  onCountChange: (count: number) => void;
+}) {
+  const [playlists,    setPlaylists]    = useState<Array<{ id: string; name: string }>>([]);
+  const [memberIds,    setMemberIds]    = useState<Set<string>>(new Set());
+  const [fetching,     setFetching]     = useState(false);
+  const [saving,       setSaving]       = useState(false);
+  const [showNewInput, setShowNewInput] = useState(false);
+  const [newName,      setNewName]      = useState('');
+  const creatingRef = useRef(false); // idempotent guard so a single submit creates exactly one setlist
+
+  useEffect(() => {
+    if (visible) {
+      loadPlaylists();
+      setShowNewInput(false);
+      setNewName('');
+    }
+  }, [visible]);
+
+  async function loadPlaylists() {
+    setFetching(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setFetching(false); return; }
+    const [playlistsRes, memberRes] = await Promise.all([
+      supabase.from('playlists').select('id, name').eq('user_id', user.id).order('created_at'),
+      supabase.from('playlist_tracks').select('playlist_id').eq('track_id', trackId),
+    ]);
+    setPlaylists(playlistsRes.data ?? []);
+    setMemberIds(new Set((memberRes.data ?? []).map(pt => pt.playlist_id)));
+    setFetching(false);
+  }
+
+  async function togglePlaylist(playlistId: string) {
+    const isMember = memberIds.has(playlistId);
+    setSaving(true);
+    if (isMember) {
+      await supabase.from('playlist_tracks')
+        .delete()
+        .eq('playlist_id', playlistId)
+        .eq('track_id', trackId);
+      const next = new Set(memberIds);
+      next.delete(playlistId);
+      setMemberIds(next);
+      onCountChange(next.size);
+    } else {
+      await supabase.from('playlist_tracks').insert({ playlist_id: playlistId, track_id: trackId, position: 0 });
+      const next = new Set([...memberIds, playlistId]);
+      setMemberIds(next);
+      onCountChange(next.size);
+    }
+    setSaving(false);
+  }
+
+  async function createAndAdd() {
+    // Fires from the keyboard's "done" key (onSubmitEditing) and the Create button.
+    // The keyboard key is the reliable one-press path on Android — see note on the input below.
+    if (creatingRef.current) return;
+    const name = newName.trim();
+    if (!name) return;
+    creatingRef.current = true;
+    setSaving(true);
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const user = authData?.user;
+      if (!user) return;
+      const { data: newPl } = await supabase
+        .from('playlists').insert({ user_id: user.id, name }).select('id, name').single();
+      if (newPl) {
+        await supabase
+          .from('playlist_tracks').insert({ playlist_id: newPl.id, track_id: trackId, position: 0 });
+        const next = new Set([...memberIds, newPl.id]);
+        setPlaylists(prev => [...prev, newPl]);
+        setMemberIds(next);
+        onCountChange(next.size);
+      }
+    } finally {
+      setNewName('');
+      setShowNewInput(false);
+      setSaving(false);
+      creatingRef.current = false;
+    }
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={plStyles.backdrop}
+        behavior="padding"
+      >
+        <View style={plStyles.sheet}>
+          <View style={plStyles.header}>
+            <Text style={plStyles.title}>Add to Setlist</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Text style={plStyles.closeBtn}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          {fetching ? (
+            <ActivityIndicator color="#DFFF00" style={{ padding: 24 }} />
+          ) : (
+              <ScrollView style={plStyles.list} keyboardShouldPersistTaps="handled">
+                {playlists.map(pl => {
+                  const isMember = memberIds.has(pl.id);
+                  return (
+                    <TouchableOpacity
+                      key={pl.id}
+                      style={plStyles.row}
+                      onPress={() => !saving && togglePlaylist(pl.id)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[plStyles.checkbox, isMember && plStyles.checkboxChecked]}>
+                        {isMember && <Ionicons name="checkmark" size={14} color="#0D0D12" />}
+                      </View>
+                      <Text style={plStyles.rowText}>{pl.name}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+          )}
+
+          {showNewInput ? (
+            <View style={plStyles.newInputWrap}>
+              <View style={plStyles.newInputRow}>
+                <TextInput
+                  style={plStyles.newInput}
+                  value={newName}
+                  onChangeText={setNewName}
+                  placeholder="Setlist name…"
+                  placeholderTextColor="#555"
+                  autoFocus
+                  returnKeyType="done"
+                  onSubmitEditing={createAndAdd}
+                />
+                <TouchableOpacity
+                  style={[plStyles.newConfirm, !newName.trim() && plStyles.newConfirmDisabled]}
+                  onPress={createAndAdd}
+                  disabled={!newName.trim() || saving}
+                >
+                  {saving
+                    ? <ActivityIndicator color="#0D0D12" size="small" />
+                    : <Text style={plStyles.newConfirmText}>Create</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+              <Text style={plStyles.newHint}>Tap ⏎ on your keyboard to create</Text>
+            </View>
+          ) : (
+            <TouchableOpacity style={plStyles.newRow} onPress={() => setShowNewInput(true)}>
+              <Ionicons name="add-circle-outline" size={20} color="#DFFF00" />
+              <Text style={plStyles.newRowText}>New setlist…</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity style={plStyles.doneBtn} onPress={onClose}>
+            <Text style={plStyles.doneBtnText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 // ─── TrackRow ─────────────────────────────────────────────────────────────────
 function TrackRow({
   track,
   onBpmSave,
   onKeySave,
+  playlistCount,
+  onPlaylistCountChange,
 }: {
   track: RecordTrack;
   onBpmSave: (bpm: number) => Promise<void>;
   onKeySave: (key: string) => Promise<void>;
+  playlistCount: number;
+  onPlaylistCountChange: (count: number) => void;
 }) {
-  const [bpmModalVisible, setBpmModalVisible] = useState(false);
-  const [keyModalVisible, setKeyModalVisible] = useState(false);
+  const [bpmModalVisible,      setBpmModalVisible]      = useState(false);
+  const [keyModalVisible,      setKeyModalVisible]      = useState(false);
+  const [playlistModalVisible, setPlaylistModalVisible] = useState(false);
 
   return (
     <View style={styles.trackRow}>
@@ -747,6 +941,13 @@ function TrackRow({
             {track.key ? track.key : '+ Key'}
           </Text>
         </TouchableOpacity>
+
+        {/* Playlist badge */}
+        <TouchableOpacity onPress={() => setPlaylistModalVisible(true)}>
+          <Text style={styles.playlistBadge}>
+            {playlistCount > 0 ? `♦ ${playlistCount}` : '+ Set'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <BpmModal
@@ -761,6 +962,13 @@ function TrackRow({
         currentKey={track.key ?? null}
         onSave={onKeySave}
         onClose={() => setKeyModalVisible(false)}
+      />
+
+      <PlaylistPickerModal
+        visible={playlistModalVisible}
+        trackId={track.id}
+        onClose={() => setPlaylistModalVisible(false)}
+        onCountChange={onPlaylistCountChange}
       />
     </View>
   );
@@ -855,8 +1063,9 @@ const styles = StyleSheet.create({
   trackTitle: { color: '#fff', fontSize: 14, flex: 1 },
   trackRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   trackDuration: { color: '#666', fontSize: 13 },
-  bpmBadge: { color: '#DFFF00', fontSize: 12, fontWeight: '600', borderWidth: 1, borderColor: '#DFFF00', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  keyBadge: { color: '#7FFFD4', fontSize: 12, fontWeight: '600', borderWidth: 1, borderColor: '#7FFFD4', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  bpmBadge:      { color: '#DFFF00', fontSize: 12, fontWeight: '600', borderWidth: 1, borderColor: '#DFFF00',  borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  keyBadge:      { color: '#7FFFD4', fontSize: 12, fontWeight: '600', borderWidth: 1, borderColor: '#7FFFD4',  borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  playlistBadge: { color: '#B39DDB', fontSize: 12, fontWeight: '600', borderWidth: 1, borderColor: '#B39DDB',  borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   bpmInputRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   bpmInput: { backgroundColor: '#2A2A3A', color: '#fff', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, fontSize: 13, width: 52, textAlign: 'center' },
   bpmSave: { color: '#7FFFD4', fontSize: 16, fontWeight: '700', paddingHorizontal: 4 },
@@ -1075,4 +1284,43 @@ const keyStyles = StyleSheet.create({
   },
   saveButtonDisabled: { opacity: 0.3 },
   saveButtonText: { color: '#0D0D12', fontSize: 16, fontWeight: '800' },
+});
+
+// ─── Playlist Picker Styles ───────────────────────────────────────────────────
+const plStyles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: '#1C1C24', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingTop: 20, paddingBottom: 40, maxHeight: '70%',
+    borderWidth: 1, borderBottomWidth: 0, borderColor: '#2A2A3A',
+  },
+  header: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 24, marginBottom: 12,
+  },
+  title:    { color: '#fff', fontSize: 18, fontWeight: '700' },
+  closeBtn: { color: '#888', fontSize: 20, paddingHorizontal: 4 },
+  list:     { maxHeight: 340 },
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingHorizontal: 24, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#2A2A3A',
+  },
+  checkbox:        { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#444', justifyContent: 'center', alignItems: 'center' },
+  checkboxChecked: { backgroundColor: '#DFFF00', borderColor: '#DFFF00' },
+  rowText:         { color: '#fff', fontSize: 15 },
+  newInputWrap:    { paddingTop: 4 },
+  newInputRow:     { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 24, paddingTop: 8, paddingBottom: 4 },
+  newHint:         { color: '#666', fontSize: 12, paddingHorizontal: 24, paddingBottom: 10 },
+  newInput: {
+    flex: 1, backgroundColor: '#0D0D12', borderRadius: 10, borderWidth: 1,
+    borderColor: '#2A2A3A', color: '#fff', fontSize: 15, paddingHorizontal: 12, paddingVertical: 8,
+  },
+  newConfirm:         { backgroundColor: '#DFFF00', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  newConfirmDisabled: { opacity: 0.35 },
+  newConfirmText:     { color: '#0D0D12', fontSize: 14, fontWeight: '700' },
+  newRow:             { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 24, paddingVertical: 16 },
+  newRowText:         { color: '#DFFF00', fontSize: 15, fontWeight: '600' },
+  doneBtn:            { marginHorizontal: 24, marginTop: 12, paddingVertical: 14, borderRadius: 14, backgroundColor: '#DFFF00', alignItems: 'center' },
+  doneBtnText:        { color: '#0D0D12', fontSize: 16, fontWeight: '800' },
 });

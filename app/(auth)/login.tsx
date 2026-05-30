@@ -36,7 +36,7 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <View style={styles.inner}>
-        <Text style={styles.logo}>VinylVault</Text>
+        <Text style={styles.logo}>Decibel Archive</Text>
         <Text style={styles.tagline}>Your records. Cataloged.</Text>
 
         <TextInput
@@ -71,7 +71,7 @@ export default function LoginScreen() {
         </TouchableOpacity>
 
         <Link href="/(auth)/signup" style={styles.link}>
-          Don't have an account? Sign up
+          Don&apos;t have an account? Sign up
         </Link>
       </View>
     </KeyboardAvoidingView>

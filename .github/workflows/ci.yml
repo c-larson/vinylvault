@@ -7,8 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  lint-and-typecheck:
-    name: Lint & Type Check
+  lint-typecheck-test:
+    name: Lint, Type Check & Test
     runs-on: ubuntu-latest
 
     steps:
@@ -35,4 +35,7 @@ jobs:
           EXPO_PUBLIC_SUPABASE_ANON_KEY: placeholder
           EXPO_PUBLIC_DISCOGS_CONSUMER_KEY: placeholder
           EXPO_PUBLIC_DISCOGS_CONSUMER_SECRET: placeholder
-          EXPO_PUBLIC_GOOGLE_VISION_API_KEY: placeholder
+          EXPO_PUBLIC_GEMINI_API_KEY: placeholder
+
+      - name: Test
+        run: npx jest --ci
