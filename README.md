@@ -16,8 +16,6 @@ Built as a capstone project for the Quantic School of Business and Technology MS
 | 📱 Install the app (Android APK) | [Releases → v1.0.0](https://github.com/c-larson/vinylvault/releases/tag/v1.0.0) |
 | 🎥 Demo / presentation video | [Watch on Google Drive](https://drive.google.com/file/d/1RT5xfgOvyRTmukbk6S9rr7LmHKU3k76J/view?usp=sharing) |
 
-> **Capstone reviewers / TODO:** replace the placeholders above with the Trello board URL, an EAS build (or Expo) install link, and the recorded demo. These are required Capstone submission components.
-
 ---
 
 ## Features
@@ -96,6 +94,8 @@ npx expo start
 
 Scan the QR code with Expo Go, or press `i` for iOS simulator.
 
+> **Just want to run the finished app?** Install the prebuilt Android APK from [Releases → v1.0.0](https://github.com/c-larson/vinylvault/releases/tag/v1.0.0) — no dev setup required.
+
 ---
 
 ## Testing
@@ -131,8 +131,7 @@ vinylvault/
 │   ├── supabase.ts      # Supabase client + saveTracks helper
 │   ├── discogs.ts       # Discogs API client (search, release, pricing)
 │   ├── gemini.ts        # Gemini Vision API client (photo → artist/album JSON)
-│   ├── deezer.ts        # Deezer BPM client (stubbed — CORS issues on mobile)
-│   ├── getsongbpm.ts    # Stubbed (Cloudflare blocks mobile requests)
+│   ├── deezer.ts        # Deezer BPM lookup (auto-populates track BPM; manual fallback)
 │   └── cells.ts         # Pure table-cell formatting helpers (unit-tested)
 ├── __tests__/           # Jest unit tests (cells, discogs)
 └── types/
@@ -153,7 +152,7 @@ vinylvault/
 
 ## Acknowledgements
 
-BPM data provided by [GetSongBPM](https://getsongbpm.com)
+BPM data from the [Deezer API](https://developers.deezer.com/api). Cover recognition by [Google Gemini](https://ai.google.dev/). Catalog data and pricing from [Discogs](https://www.discogs.com/developers).
 
 ---
 
